@@ -1,7 +1,7 @@
 # StudyOS — Product Specification and Requirements Baseline
 
-- **Document Version:** 1.0.0
-- **Status:** Approved Baseline (Committed at 1827f1a) | Stage 1 Complete & Approved (Committed at 84db803) | Stage 2 Complete & Approved (Committed at 7026c4c) | Stage 3 Complete & Approved (Committed at 3d9e26e) | Stage 4 Implementation in review
+- **Document Version:** 1.1.0
+- **Status:** Approved Baseline (Committed at 1827f1a) | Stage 1 Complete & Approved (Committed at 84db803) | Stage 2 Complete & Approved (Committed at 7026c4c) | Stage 3 Complete & Approved (Committed at 3d9e26e) | Stage 4 Complete & Approved (Committed at 7351c60) | Stage 5 Implementation in review
 - **System Target:** Local-First Personalized Learning Operating System
 - **Hardware Profile:** Windows 11 | NVIDIA RTX 5060 Laptop GPU (8 GB VRAM) | 16 GB System RAM
 
@@ -158,11 +158,11 @@ Requirements are categorized into:
 
 | ID | Priority | Requirement Description | Acceptance Criteria (P0) / Target Behavior |
 | :--- | :---: | :--- | :--- |
-| **REQ-F1** | **P0** | **Relational Session Persistence:** Persist all courses, documents, exam configurations, quiz attempts, and scores in local SQLite. | **AC-F1:** Closing the application and reopening it completely restores course list, document library, and past quiz attempt history. |
-| **REQ-F2** | **P0** | **Mistake Logging:** Store every incorrectly answered question, the student's selected answer, the correct answer, and timestamp. | **AC-F2:** The database records incorrect attempts in table `question_attempts`; user can view a "Recent Mistakes" list across past quizzes. |
-| **REQ-F3** | **P1** | **Concept Mastery Estimation:** Calculate a numeric mastery estimate (0.0 to 1.0) for topics and documents based on historical quiz performance. | Updates mastery score dynamically as new quizzes are attempted; highlights weak topics in red/amber. |
-| **REQ-F4** | **P1** | **Weakness-Targeted Re-examination:** One-click generation of a "Remediation Quiz" composed specifically of concepts or questions previously missed. | Queries `question_attempts` where `is_correct = 0` to seed new quiz generation. |
-| **REQ-F5** | **P2** | **Spaced Repetition Scheduling:** Track memory decay using an algorithm (e.g., SM-2 / FSRS) to schedule proactive review notifications. | Flags topics that are due for revision based on days elapsed since last successful recall. |
+| **REQ-F1** | **P0** | **Relational Learner Profile & Activity History:** Persist local learner profile, chronological activity events, and study history in local SQLite WAL storage with application-generated IDs and foreign keys. | **AC-F1:** Closing and reopening restores learner state; study events (exam submissions, reviews, manual grades) are logged chronologically; repeated processing of the same attempt is idempotent and does not duplicate events. |
+| **REQ-F2** | **P0** | **Course-Scoped Concept Catalog & Grounding:** Maintain normalized, course-scoped concepts linked to assessment questions and source chunks, preventing cross-course collision and tracking label provenance. | **AC-F2:** Concepts with identical names across different courses remain strictly isolated; concepts link to questions and chunks; automated extraction uses local chat with bounded validation; stale chunk references are marked without corrupting history. |
+| **REQ-F3** | **P0** | **Explainable Concept Mastery Estimation:** Deterministic Laplace-smoothed accuracy $(k+1)/(n+2)$ where $k = \sum p_i$ represents normalized earned-credit successes across $n$ observations, with uniform Beta(1,1) prior and sample-size uncertainty tracking, categorizing concepts into `unassessed`, `needs_evidence`, `weak`, `moderate`, and `strong`. | **AC-F3:** Zero graded observations yields `unassessed`; pending manual-review answers never penalize mastery; corrected grades safely supersede earlier states; output communicates evidence counts and recency. |
+| **REQ-F4** | **P1** | **Spaced Repetition Review Scheduling:** Bounded offline interval policy (1 to 180 days, ease factor 1.3 to 3.0) calculating next due dates from graded performance and recorded review outcomes without cloud services. | **AC-F4:** Reschedules dynamically on correct/incorrect/partial outcomes; distinguishes due, overdue, and scheduled states; recording a review updates schedule idempotently; review queue preserves course and concept isolation. |
+| **REQ-F5** | **P1** | **Explainable Progress Summaries & Recommendations:** Rule-based progress summaries and ranked study recommendations with explicit reasons (overdue review, weak accuracy, insufficient evidence) without LLM hallucinations. | **AC-F5:** Summary queries support course filtering; recommendations explain specific underlying performance reasons; pending attempts are not presented as final outcomes. |
 
 ---
 

@@ -35,6 +35,7 @@ class AssessmentService:
         config: AppConfig | None = None,
         repository: AssessmentRepository | None = None,
         grader: ExamGrader | None = None,
+        learner_service: Any | None = None,
     ) -> None:
         self.db = db
         self.retrieval_service = retrieval_service
@@ -48,6 +49,14 @@ class AssessmentService:
             repository=self.repository,
             config=self.config,
         )
+        if learner_service is not None:
+            self.learner_service = learner_service
+        else:
+            try:
+                from studyos.learner.service import LearnerService
+                self.learner_service = LearnerService(db=self.db, chat_provider=self.chat_provider, config=self.config)
+            except Exception:
+                self.learner_service = None
 
     def generate_exam(self, request: ExamRequest) -> Exam:
         """Generate a new grounded exam and save it to the database."""
@@ -108,6 +117,13 @@ class AssessmentService:
         result = self.repository.get_attempt_result(attempt_id)
         if not result:
             raise RuntimeError(f"Failed to retrieve graded attempt result for '{attempt_id}'.")
+
+        if self.learner_service is not None:
+            try:
+                self.learner_service.process_exam_attempt_results(attempt_id, result)
+            except Exception as e:
+                logger.warning("Failed to update learner model for attempt '%s': %s", attempt_id, e)
+
         return result
 
     def grade_short_answer_manually(
@@ -118,12 +134,26 @@ class AssessmentService:
         feedback: str | None = None,
     ) -> ExamResult:
         """Complete manual instructor grading for an ungraded short-answer response."""
-        return self.repository.grade_question_manually(
+        result = self.repository.grade_question_manually(
             attempt_id=attempt_id,
             question_id=question_id,
             awarded_score=score,
             feedback=feedback,
         )
+        if self.learner_service is not None:
+            try:
+                qr = next((q for q in result.questions if q.question_id == question_id), None)
+                if qr:
+                    self.learner_service.process_manual_review_finalized(
+                        attempt_id=attempt_id,
+                        question_id=question_id,
+                        awarded_score=score,
+                        max_score=qr.max_score,
+                        is_correct=bool(qr.is_correct),
+                    )
+            except Exception as e:
+                logger.warning("Failed to update learner model for manual review '%s': %s", question_id, e)
+        return result
 
     def get_attempt_result(self, attempt_id: str) -> ExamResult | None:
         """Retrieve the completed report and explanations for a previous attempt."""

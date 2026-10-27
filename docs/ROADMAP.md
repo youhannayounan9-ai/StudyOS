@@ -1,7 +1,7 @@
 # StudyOS — Staged Development Roadmap & Execution Plan
 
-- **Document Version:** 1.0.0
-- **Status:** Approved Baseline (Committed at 1827f1a) | Stage 1 Complete & Approved (Committed at 84db803) | Stage 2 Complete & Approved (Committed at 7026c4c) | Stage 3 Complete & Approved (Committed at 3d9e26e) | Stage 4 Implementation in review
+- **Document Version:** 1.1.0
+- **Status:** Approved Baseline (Committed at 1827f1a) | Stage 1 Complete & Approved (Committed at 84db803) | Stage 2 Complete & Approved (Committed at 7026c4c) | Stage 3 Complete & Approved (Committed at 3d9e26e) | Stage 4 Complete & Approved (Committed at 7351c60) | Stage 5 Implementation in review
 - **System Target:** Local-First Personalized Learning Operating System
 - **Hardware Profile:** Windows 11 | NVIDIA RTX 5060 Laptop GPU (8 GB VRAM) | 16 GB System RAM
 
@@ -14,7 +14,7 @@ StudyOS follows a disciplined, stage-gated engineering methodology:
 2. **First Usable Release Prioritization:** Stages 0 through 4 deliver the foundational, fully functional local study loop (Ingest $\rightarrow$ Retrieve $\rightarrow$ Tutor with Citations $\rightarrow$ Exam & Grade). Stages 5 through 7 enrich the cognitive modeling, adaptation, and system hardening.
 3. **Realistic Verification Time:** Hour estimates explicitly include debugging on Windows, edge-case testing, citation auditing, and learning curves.
 4. **No Premature Optimization:** Architectural modularity is established early, but complex features (e.g., cross-encoders, multimodal vision, external research) are gated behind stable core baselines.
-5. **Explicit Git Commit Checkpoints:** Work for each stage is reviewed and verified in the local working tree before being committed as a permanent baseline. Stage 0 documentation was approved and committed as baseline commit `1827f1a`; Stage 1 ingestion engine is approved and committed as baseline commit `84db803`; Stage 2 hybrid retrieval is committed as baseline commit `7026c4c`; Stage 3 AI tutor is committed as baseline commit `3d9e26e`; Stage 4 assessment engine is currently implemented and under review.
+5. **Explicit Git Commit Checkpoints:** Work for each stage is reviewed and verified in the local working tree before being committed as a permanent baseline. Stage 0 documentation was approved and committed as baseline commit `1827f1a`; Stage 1 ingestion engine is approved and committed as baseline commit `84db803`; Stage 2 hybrid retrieval is committed as baseline commit `7026c4c`; Stage 3 AI tutor is committed as baseline commit `3d9e26e`; Stage 4 assessment engine is approved and committed as baseline commit `7351c60`; Stage 5 learner model and mastery tracking is currently implemented and under review.
 
 ---
 
@@ -138,7 +138,7 @@ StudyOS follows a disciplined, stage-gated engineering methodology:
 ---
 
 ### Stage 4: Exam Generation, Submission & Automated Grading Engine
-- **Status:** Implementation in review (175 automated tests passing).
+- **Status:** Complete & Approved (Baseline Committed at `7351c60`).
 - **Scope:** Build a dependable, local-first assessment engine that generates customized practice exams (Multiple Choice, True/False, and Short-Answer) from course materials using hybrid retrieval, assigned evidence markers, and local Ollama inference. Enforce answer-key confidentiality via public exam views (`PublicExam`) that strictly omit correct answers, reference answers, explanations, and rubrics. Store exams, questions, and attempts persistently in SQLite using migrations `0003_assessment_engine.sql`, `0004_grading_states_and_citation_snapshots.sql`, and `0005_source_reference_set_null.sql`. Implement deterministic objective grading, skipped-question scoring (0.0), and conservative short-answer manual review/model evaluation. Provide post-submission results grounded in verified SQLite chunk metadata with stale-chunk detection.
 - **Explicit Non-Goals:** Web/Streamlit UI (deferred), persistent learner mastery graphs, spaced repetition scheduling, or cross-course skill tracking (reserved for Stage 5).
 - **Expected Deliverables:**
@@ -175,26 +175,37 @@ StudyOS follows a disciplined, stage-gated engineering methodology:
 
 ---
 
-### Stage 5: Persistent Learner Model & Mistake Analytics
-- **Scope:** Build the persistent student cognitive model in SQLite (`concept_mastery`, `mistake_log`). Implement algorithms to estimate topic mastery from question attempts, track historical error trends, and calculate uncertainty intervals. Build the Learner Dashboard in Streamlit with visual progress indicators, mastery heatmaps, and a one-click "Remediation Exam" generator targeting past mistakes.
-- **Explicit Non-Goals:** External web research, multi-user analytics.
+### Stage 5: Persistent Learner Model, Mastery Tracking & Personalized Revision
+- **Status:** Implementation in review (212 automated tests passing).
+- **Scope:** Build a persistent local learner cognitive model that tracks study activity, assessment history, and concept-level mastery from course materials. Implement a course-scoped normalized concept catalog with question-to-concept and source-chunk mappings. Implement deterministic, explainable Laplace-smoothed mastery estimation, distinguishing lack of evidence from poor understanding and never penalizing pending manual reviews. Implement an offline spaced-repetition review scheduler with due/overdue tracking, rating progression, and explainable recommendations. Build an operational CLI (`scripts/learner.py`) for inspecting progress, listing concepts/reviews, recording review outcomes, and diagnostic explanations.
+- **Explicit Non-Goals:** Web or Streamlit UI (deferred to UI phase), external web research, multi-user authentication, cloud APIs, unbounded conversational memory.
 - **Expected Deliverables:**
-  - `studyos.learner.mastery`: Mastery calculation service (exponential moving average / BKT).
-  - `studyos.learner.remediation`: Generator for targeted weakness quizzes.
-  - `studyos.ui.pages.analytics`: Streamlit mastery dashboard with charts and mistake logs.
-  - Automated tests: `tests/unit/test_learner_model.py`.
-- **Prerequisites:** Stage 4 complete; historical exam attempt records.
+  - `studyos.storage.migrations.0006_learner_model.sql`: Normalized tables (`learner_profile`, `concepts`, `question_concepts`, `concept_chunks`, `concept_mastery`, `learner_events`, `review_tasks`) with foreign keys, indexes, and cascade integrity.
+  - `studyos.learner.models`: Pydantic domain models for learner profiles, concepts, mastery, review tasks, progress summaries, and recommendations.
+  - `studyos.learner.mastery`: Deterministic Laplace-smoothed mastery estimation with uncertainty tracking and categorization (`unassessed`, `needs_evidence`, `weak`, `moderate`, `strong`).
+  - `studyos.learner.scheduler`: Deterministic bounded spaced repetition scheduler (SM-2/Leitner interval policy, due/overdue calculation).
+  - `studyos.learner.concept_mapper`: Concept name normalization, trusted source title extraction, and bounded local LLM tagging fallback.
+  - `studyos.learner.repository`: Authoritative SQLite persistence for learner events, mastery states, concepts, and review queues with nested transaction safety.
+  - `studyos.learner.service`: High-level learner service orchestrating idempotent attempt processing, manual regrading updates, course summaries, and recommendations.
+  - `scripts/learner.py`: Operational learner CLI (`progress`, `concepts`, `history`, `reviews`, `record-review`, `recommendations`, `why`).
+  - Automated tests: `tests/unit/test_learner_models.py`, `tests/unit/test_learner_mastery.py`, `tests/unit/test_learner_scheduler.py`, `tests/unit/test_concept_mapping.py`, `tests/unit/test_learner_repository.py`, `tests/unit/test_learner_service.py`, `tests/unit/test_learner_migrations.py`, `tests/integration/test_learner_end_to_end.py`.
+- **Prerequisites:** Stage 4 complete; SQLite database containing assessment attempts.
 - **Risks:**
-  - Mastery score volatility if too few questions are attempted.
-  - Unclear topic tagging in source documents.
+  - Double-counting attempts on repeat processing (mitigated by idempotent attempt event checks).
+  - Conflating pending manual review with zero score (mitigated by explicit nullable scores and status filtering).
+  - Premature claims of mastery on small samples (mitigated by Laplace smoothing and explicit `needs_evidence` category for N < 3).
 - **Verification Commands & Procedures:**
-  - Run mastery unit tests: `pytest tests/unit/test_learner_model.py -v`.
-  - Simulate quiz failures in test script $\rightarrow$ verify mastery score drops for targeted topic and remediation quiz pulls failed questions.
+  - Run full test suite: `pytest -v` (212 passing tests).
+  - Learner unit tests: `pytest tests/unit/test_learner_*.py -v`.
+  - Learner integration pipeline test: `pytest tests/integration/test_learner_end_to_end.py -v`.
+  - Operational CLI demo: `python scripts/learner.py progress`, `python scripts/learner.py concepts`, `python scripts/learner.py recommendations`.
 - **Acceptance Criteria:**
-  - Topic mastery updates deterministically after every exam submission.
-  - System successfully generates a remediation quiz consisting solely of previously missed concepts.
-  - Application restart preserves all mastery levels and mistake logs identically.
-- **Estimated Focused Hours:** 14–20 hours (Uncertainty: $\pm 20\%$).
+  - Concept mastery updates deterministically after exam submission or manual review finalization.
+  - Zero observations strictly yields `unassessed` (never zero mastery). Pending manual review questions never penalize mastery.
+  - Spaced repetition queue correctly tracks due and overdue dates and advances intervals upon recorded outcomes.
+  - Course-level data isolation is strictly enforced across concepts, mastery records, and progress summaries.
+  - 100% offline test suite execution with 212 passing tests and zero regressions.
+- **Estimated Focused Hours:** 14–20 hours (Completed in Stage 5).
 - **Dependencies:** Stage 4.
 
 ---
@@ -254,8 +265,8 @@ StudyOS follows a disciplined, stage-gated engineering methodology:
 | **1** | **Document Ingestion & Storage** | Parsers, Chunking, SQLite DB | **14–20 h** | 20–30 h |
 | **2** | **Hybrid Retrieval Engine** | ChromaDB, FTS5 BM25, RRF Fusion | **12–18 h** | 32–48 h |
 | **3** | **AI Tutor with Citations** | Ollama 7B/8B, Grounding, Streamlit UI | **16–24 h** | 48–72 h |
-| **4** | **Assessment & Exam Engine** | Quiz Gen, Leak Prevention, Grading | **18–26 h** | 66–98 h |
-| **5** | **Persistent Learner Model** | Mastery Tracking, Mistake Remediation | **14–20 h** | 80–118 h |
+| **4** | **Assessment & Exam Engine** | Quiz Gen, Leak Prevention, Grading | **18–26 h** *(Done)* | 66–98 h |
+| **5** | **Persistent Learner Model** | Mastery Tracking, Spaced Revision | **14–20 h** *(Under Review)* | 80–118 h |
 | **6** | **Adaptive Learning & Research** | Spaced Repetition, Scaffolding | **16–22 h** | 96–140 h |
 | **7** | **Evaluation & Portfolio Polish** | Benchmarks, Security, Coverage | **20–28 h** | 116–168 h |
 | **Total** | **Full System Lifecycle** | **Production-Grade Personal StudyOS** | **116–168 h** | **~3–5 calendar weeks** |

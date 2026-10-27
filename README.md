@@ -6,20 +6,20 @@ StudyOS is an intelligent personal study environment designed for computer scien
 
 ---
 
-## Current Status: Stage 4 — Implementation in review (Exam & Assessment Generation Engine)
+## Current Status: Stage 5 — Implementation in review (Learner Model, Mastery Tracking & Personalized Revision)
 
-StudyOS is developed under a disciplined, incremental engineering roadmap. Stage 0 (Architecture & Specification), Stage 1 (Document Ingestion Engine), Stage 2 (Hybrid Retrieval & Evidence Grounding Engine), and Stage 3 (AI Tutor & Grounded Interactive Answering) are complete and committed to the baseline. Stage 4 (Exam Generation, Submission & Automated Grading Engine) is implemented and verified with 166 automated tests passing, currently undergoing review.
+StudyOS is developed under a disciplined, incremental engineering roadmap. Stage 0 (Architecture & Specification), Stage 1 (Document Ingestion Engine), Stage 2 (Hybrid Retrieval & Evidence Grounding Engine), Stage 3 (AI Tutor & Grounded Interactive Answering), and Stage 4 (Exam Generation, Submission & Automated Grading Engine) are complete and committed to the baseline. Stage 5 (Learner Model, Mastery Tracking & Personalized Revision) is implemented and verified with 222 automated tests passing, currently undergoing review.
 
 - [x] **Stage 0: Architecture & Specification** *(Approved & Baseline Committed at `1827f1a`)*
 - [x] **Stage 1: Document Ingestion, Parsing & Normalization Engine** *(Approved & Baseline Committed at `84db803`)*
 - [x] **Stage 2: Hybrid Retrieval & Evidence Grounding Engine** *(Approved & Baseline Committed at `7026c4c`)*
 - [x] **Stage 3: AI Tutor & Grounded Interactive Answering** *(Approved & Baseline Committed at `3d9e26e`)*
-- [ ] **Stage 4: Exam Generation, Submission & Automated Grading Engine** *(Implementation in review)*
-- [ ] **Stage 5: Persistent Learner Model & Mistake Analytics** *(Upcoming)*
+- [x] **Stage 4: Exam Generation, Submission & Automated Grading Engine** *(Approved & Baseline Committed at `7351c60`)*
+- [ ] **Stage 5: Learner Model, Mastery Tracking & Personalized Revision** *(Implementation in review)*
 - [ ] **Stage 6: Adaptive Learning, Spaced Repetition & External Research**
 - [ ] **Stage 7: Comprehensive Evaluation, Security & Portfolio Polish**
 
-*Note: In accordance with Stage 4 scope, the assessment engine generates structured practice exams (MCQ, True/False, and Short-Answer) grounded strictly in course materials retrieved via hybrid search. The public student taking view guarantees zero leakage of answer keys or explanations. Submissions are scored deterministically, with full explanations and verified source citations provided upon completion.*
+*Note: In accordance with Stage 5 scope, the learner model provides persistent, course-scoped concept tracking, Laplace-smoothed empirical mastery estimation, chronological study event logging, bounded offline spaced-repetition review scheduling, and explainable study recommendations without calling external cloud services or treating unassessed material as failure.*
 
 ---
 
@@ -246,6 +246,36 @@ StudyOS provides a complete, local-first assessment CLI without requiring a web 
 .\.venv\Scripts\python.exe scripts/exams.py generate --course "CS101" --count 2 --fake-chat --fake-embeddings
 ```
 
+#### F. Inspecting Progress, Concepts, Reviews & Recommendations (`scripts/learner.py`)
+StudyOS provides an operational, local-first learner model CLI:
+```powershell
+# 1. View overall learner progress or course-scoped progress
+.\.venv\Scripts\python.exe scripts/learner.py progress
+.\.venv\Scripts\python.exe scripts/learner.py progress --course "<COURSE_ID>"
+
+# 2. List concepts and their mastery status
+.\.venv\Scripts\python.exe scripts/learner.py concepts
+.\.venv\Scripts\python.exe scripts/learner.py concepts --course "<COURSE_ID>"
+
+# 3. View chronological study activity history
+.\.venv\Scripts\python.exe scripts/learner.py history --limit 10
+.\.venv\Scripts\python.exe scripts/learner.py history --course "<COURSE_ID>"
+
+# 4. View scheduled, due, and overdue review tasks
+.\.venv\Scripts\python.exe scripts/learner.py reviews
+.\.venv\Scripts\python.exe scripts/learner.py reviews --overdue-only
+
+# 5. Record a completed review outcome (ratings: good, pass, fail)
+.\.venv\Scripts\python.exe scripts/learner.py record-review --concept-id "<CONCEPT_ID>" --rating good
+
+# 6. View prioritized, explainable study recommendations
+.\.venv\Scripts\python.exe scripts/learner.py recommendations
+.\.venv\Scripts\python.exe scripts/learner.py recommendations --course "<COURSE_ID>"
+
+# 7. Inspect why a specific concept is recommended
+.\.venv\Scripts\python.exe scripts/learner.py why --concept-id "<CONCEPT_ID>"
+```
+
 ---
 
 ### 5. Stage 3 Grounding Architecture & Citation Provenance
@@ -365,7 +395,65 @@ StudyOS provides a complete, local-first assessment CLI without requiring a web 
 
 ---
 
-### 7. Partial Failure Handling & Index Recovery
+### 7. Stage 5 Learner Model, Mastery Tracking & Spaced Repetition Architecture
+
+```
+                 Exam Attempt / Manual Grade / Review
+                                 │
+                                 ▼
+                     [Learner Service Facade]
+                                 │
+              ┌──────────────────┴──────────────────┐
+              ▼                                     ▼
+     [Idempotent Event Log]              [Question-to-Concept Mapping]
+  - Chronological study history        - Course-scoped normalized concepts
+  - Deduplicated by attempt_id         - Evidence-backed chunk links
+  - Preserves pending vs. graded       - Reject cross-course collision
+              │                                     │
+              └──────────────────┬──────────────────┘
+                                 ▼
+               [Deterministic Mastery Calculation]
+             - Laplace-smoothed empirical accuracy:
+                 M = (k + 1) / (n + 2)
+             - Uniform Beta(1, 1) prior
+             - Explicit categories:
+                 unassessed (n=0)
+                 needs_evidence (1 <= n < 3)
+                 weak (n>=3, M < 0.60)
+                 moderate (n>=3, 0.60 <= M < 0.85)
+                 strong (n>=3, M >= 0.85)
+             - Exclude pending grades completely
+             - Corrected grades recompute safely
+                                 │
+                                 ▼
+               [Spaced Repetition Review Queue]
+             - Bounded offline interval policy (1 to 180 days)
+             - Dynamic ease factor adjustment (1.3 to 3.0)
+             - Status: scheduled, due (<= now), overdue (< now - 24h)
+             - Rating updates: good (I*EF), pass (I*1.2), fail (I=1)
+                                 │
+                                 ▼
+               [Explainable Progress & Recommendations]
+             - Rule-based priority queue (zero hallucinated stats)
+             - Priority: Overdue > Weak > Due > Needs Evidence > Unassessed
+             - Traceable supporting evidence & explicit reasons
+```
+
+- **Separation of Observed Evidence vs. Estimated Mastery**: The model never treats lack of evidence as poor understanding. An unassessed concept ($n=0$) is categorized as `unassessed` ($M=0.0$ default estimate with prior uncertainty $\sigma \approx 0.29$), not a zero-mastery failure. Concepts with $1 \le n < 3$ observations are categorized as `needs_evidence`.
+- **Laplace Smoothing Formula & Interpretability**:
+  For every valid, completed, graded observation $i$ with earned score $\text{score\_earned}_i \ge 0$ and positive possible score $\text{score\_possible}_i > 0$, the normalized credit is:
+  $$p_i = \frac{\text{score\_earned}_i}{\text{score\_possible}_i} \in [0.0, 1.0]$$
+  For $n$ eligible observations, the fractional successes (normalized earned credits) and Laplace-smoothed mastery estimate are:
+  $$k = \sum_{i=1}^n p_i, \quad M = \frac{k + 1}{n + 2}, \quad \text{Uncertainty } \sigma = \sqrt{\frac{(k + 1)(n - k + 1)}{(n + 2)^2 (n + 3)}}$$
+  where $0.0 \le k \le n$. Each eligible observation contributes exactly one unit of evidence to $n$, with partial credit contributing a fractional success $p_i \in [0.0, 1.0]$ rather than raw unnormalized points.
+  *What this does and does not prove:* This formula provides a transparent, empirical heuristic under a uniform $\text{Beta}(1, 1)$ prior. It does **not** claim to measure latent cognitive intelligence, neurological retention, or psychological aptitude.
+- **Grading State Integrity**: Pending manual-review answers (`pending_manual_review`) and attempts awaiting grading (`pending_review`) are completely excluded from $k$ and $n$. They never lower concept mastery or count as false zeros. Finalizing a manual grade records an event and idempotently recomputes mastery from deduplicated history.
+- **Bounded Offline Spaced-Repetition**: The review scheduler calculates intervals $I \in [1, 180]$ days entirely offline without cloud dependencies. Quality scores $q \in \{1, 3, 5\}$ adjust intervals and ease factors ($EF \in [1.3, 3.0]$), with failing reviews immediately resetting intervals to 1 day.
+- **Rule-Based Recommendations**: Recommendations are produced deterministically from known relational state, explaining the exact reason (e.g., `"Review overdue (due 2026-10-25)"`, `"Consistently weak accuracy (45.0% across 4 observations)"`, `"Insufficient evidence (1 graded observation)"`). Generative language models are never used to hallucinate progress summaries or study statistics.
+
+---
+
+### 8. Partial Failure Handling & Index Recovery
 - **Non-blocking Indexing**: Ingestion transactions in SQLite commit independently. If vector embedding or ChromaDB indexing fails post-commit (e.g., if Ollama is paused or out of memory), the SQLite document and chunk data remain intact.
 - **Actionable Warnings**: The ingestion pipeline logs a partial failure warning with the exact recovery command.
 - **Idempotent Repair**: Running `python scripts/sync_index.py --sync` safely catches up unsynced chunks without duplicating or corrupting existing embeddings.
@@ -373,7 +461,7 @@ StudyOS provides a complete, local-first assessment CLI without requiring a web 
 
 ---
 
-### 8. Automated Testing Without Ollama
+### 9. Automated Testing Without Ollama
 The entire test suite is 100% deterministic and runs completely offline without requiring a running Ollama daemon or downloading models:
 - **Fake Embeddings**: Unit and integration tests inject `FakeEmbeddingProvider`, generating deterministic 384-dimensional vectors from SHA-256 hashes.
 - **Fake Chat Provider**: Tutor and exam tests inject `FakeChatProvider`, supporting queued responses, citation verification, and error simulation.
@@ -387,12 +475,13 @@ Run the complete test suite:
 
 ---
 
-### 9. Current Known Limitations
+### 10. Current Known Limitations
 - **Citation Provenance vs. Claim Entailment**: The application strictly validates citation reference provenance (guaranteeing that every citation resolves to a real SQLite chunk retrieved for that query and rejecting invented markers). However, syntactic citation validation does not mathematically prove logical entailment of the generated claim. Formal natural language inference (NLI) evaluation is reserved for Stage 7.
 - **Assessment Structure vs. Pedagogical Validity**: The assessment engine deterministically validates question structure, schema, distractor uniqueness, single-correct-answer constraints, and evidence marker provenance. However, automated generation cannot guarantee pedagogical perfection or replace human instructor review.
 - **Conservative Short-Answer Grading**: Open-ended question grading defaults to manual instructor review when offline to prevent hallucinated scoring. Automated model grading is strictly bounded by max points and criterion rubrics.
+- **Heuristic Concept Extraction**: Automated concept labeling uses bounded local LLM extraction or fallback topic extraction from question metadata. While deduplication prevents name collisions within courses, subtle synonymy (e.g., "Binary Search" vs. "B-Search") is handled via normalized strings and manual reassignment workflows.
+- **Heuristic Spaced Repetition**: The review scheduling algorithm uses bounded SM-2/Leitner intervals. While explainable and dependable offline, it is an empirical study policy rather than a mathematically optimal memory decay model.
 - **Ollama Prerequisite for Live Chat & Semantic Search**: Live interactive answering requires a local Ollama daemon serving `qwen2.5:7b` (for tutoring/exams) and `all-minilm:latest` (for dense embeddings). When offline, the CLI operates in degraded mode or via the `--fake-chat` and `--fake-embeddings` flags.
-- **Single-Turn Scoped Q&A**: Stage 3 implements stateless, evidence-grounded single-turn question answering. Multi-turn dialogue and persistent learner memory are planned for Stage 5.
 - **Prompt Injection Defense in Depth**: Delimitation, system instruction separation, and token extraction provide robust defense against document-borne instructions, but prompt-injection defense remains defense-in-depth rather than a mathematical guarantee against language model non-determinism.
 
 ---

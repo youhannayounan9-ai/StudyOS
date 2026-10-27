@@ -1,7 +1,7 @@
 # StudyOS — System Architecture & Technical Design Baseline
 
-- **Document Version:** 1.0.0
-- **Status:** Approved Baseline (Committed at 1827f1a) | Stage 1 Complete & Approved (Committed at 84db803) | Stage 2 Complete & Approved (Committed at 7026c4c) | Stage 3 Complete & Approved (Committed at 3d9e26e) | Stage 4 Implementation in review
+- **Document Version:** 1.1.0
+- **Status:** Approved Baseline (Committed at 1827f1a) | Stage 1 Complete & Approved (Committed at 84db803) | Stage 2 Complete & Approved (Committed at 7026c4c) | Stage 3 Complete & Approved (Committed at 3d9e26e) | Stage 4 Complete & Approved (Committed at 7351c60) | Stage 5 Implementation in review
 - **System Target:** Local-First Personalized Learning Operating System
 - **Hardware Profile:** Windows 11 | NVIDIA RTX 5060 Laptop GPU (8 GB VRAM) | 16 GB System RAM
 
@@ -154,14 +154,40 @@ graph TD
 - **Outputs:** `ExamPaper` (pre-submission), `GradedExamReport` (post-submission).
 - **Dependencies:** `RetrievalService`, `LLMProvider`, `SQLiteDB`.
 
-### 3.10 Persistent Learner Model & Analytics (`studyos.learner`)
-- **Responsibilities:** Maintains the student's mastery profile across courses and topics; logs errors; identifies recurring misconceptions.
-- **Mastery Calculation:** Exponential moving average or Bayesian Knowledge Tracing updating topic competency $M \in [0.0, 1.0]$:
-  $$M_{new} = M_{old} + \alpha \cdot (Score - M_{old})$$
-  Penalizes repeated errors on foundational questions; provides uncertainty intervals based on sample size.
-- **Inputs:** `question_attempts` records.
-- **Outputs:** Topic mastery scores, list of flagged weaknesses, candidate questions for remediation exams.
-- **Dependencies:** `SQLiteDB`.
+### 3.10 Persistent Learner Model, Mastery Tracking & Spaced Repetition (`studyos.learner`)
+- **Responsibilities:** Maintains the student's mastery profile across courses and concepts; logs study events chronologically; calculates explainable concept mastery; schedules personalized spaced-repetition reviews; generates ranked, explainable study recommendations.
+- **Course-Scoped Concept Catalog:** Concepts are normalized, course-scoped entities (`studyos.learner.models.Concept`) mapped to assessment questions (`question_concepts`) and source chunks (`concept_chunks`). Concepts with identical names across courses remain strictly isolated. Provenance of automated labels is preserved.
+- **Deterministic Laplace-Smoothed Mastery Calculation:**
+  Concept mastery $M$ is estimated using Laplace-smoothed empirical accuracy with normalized earned-credit successes under a uniform $\text{Beta}(1, 1)$ prior:
+  For each valid, completed, graded observation $i$ with earned score $\text{score\_earned}_i \ge 0$ and positive possible score $\text{score\_possible}_i > 0$:
+  $$p_i = \frac{\text{score\_earned}_i}{\text{score\_possible}_i} \in [0.0, 1.0]$$
+  For $n$ eligible observations:
+  $$k = \sum_{i=1}^n p_i, \quad M = \frac{k + 1}{n + 2}$$
+  Here, $k$ represents fractional successes or normalized earned-credit equivalents ($0.0 \le k \le n$), not raw unnormalized points. Each observation contributes exactly one unit of evidence to $n$, preventing questions with different maximum points from skewing evidence weights.
+  Estimation uncertainty is quantified by posterior standard deviation:
+  $$\sigma = \sqrt{\frac{(k + 1)(n - k + 1)}{(n + 2)^2 (n + 3)}}$$
+  **Mastery Categories:**
+  - `unassessed`: $n = 0$ (no graded observations; distinct from poor performance; default score $M=0.0$, $\sigma \approx 0.2887$).
+  - `needs_evidence`: $1 \le n < 3$ (insufficient data to make confident determination).
+  - `weak`: $n \ge 3$ and $M < 0.60$ (consistently poor graded performance).
+  - `moderate`: $n \ge 3$ and $0.60 \le M < 0.85$ (adequate performance; continuing practice).
+  - `strong`: $n \ge 3$ and $M \ge 0.85$ (consistent high accuracy).
+  *Caveat:* Mastery is an empirical heuristic and does not prove permanent understanding or cognitive ability.
+- **Grading State Integrity:**
+  - `pending_manual_review` answers and `pending_review` attempts are excluded from $k$ and $n$. They never lower mastery or count as false zeros.
+  - Finalizing a manual grade records a `manual_grade_finalized` event and idempotently updates mastery from deduplicated history.
+  - Skipped objective questions count as graded zero score ($p_i = 0.0, n += 1$) per Stage 4 semantics.
+- **Bounded Spaced-Repetition Review Scheduler:**
+  - Operates completely offline with deterministic intervals $I \in [1, 180]$ days and ease factors $EF \in [1.3, 3.0]$.
+  - Quality score $q \in \{1, 3, 5\}$ derived from graded score:
+    - $s \ge 0.85 \implies q = 5$ (Success: $I_1 = 1$, $I_2 = 6$, $I_r = \lceil I_{r-1} \times EF \rceil$, $EF \leftarrow \min(3.0, EF + 0.1)$)
+    - $0.60 \le s < 0.85 \implies q = 3$ (Hard/Pass: $I \leftarrow \max(1, \lceil I \times 1.2 \rceil)$)
+    - $s < 0.60 \implies q = 1$ (Fail: resets $I \leftarrow 1$, $EF \leftarrow \max(1.3, EF - 0.2)$, resets repetition count)
+  - Tasks distinguish `scheduled`, `due` ($\le \text{now}$), `overdue` ($< \text{now} - 24\text{h}$), and `completed`.
+- **Explainable Recommendations:** Prioritizes overdue reviews, weak concepts ($M < 0.60, n \ge 3$), due reviews, concepts needing evidence ($1 \le n < 3$), unassessed concepts ($n = 0$), moderate progress, and retention, each citing explicit supporting reasons.
+- **Inputs:** `exam_attempts`, `question_attempts`, manual grades, review task outcomes.
+- **Outputs:** `LearnerProgressSummary`, `CourseProgressSummary`, `ConceptProgressSummary`, `StudyRecommendation`, `ReviewTask`.
+- **Dependencies:** `SQLiteDB`, `studyos.assessment.models`.
 
 ### 3.11 Logging, Testing & Evaluation (`studyos.eval`)
 - **Responsibilities:** Structured logging with privacy scrubbing (masks raw document snippets from terminal output); automated regression test runners; retrieval precision and answer faithfulness benchmarks.
@@ -489,18 +515,109 @@ CREATE TABLE question_attempts (
     attempted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Concept Mastery Table
-CREATE TABLE concept_mastery (
+-- Exam Question Sources Table (Historical Citation Lifecycle & Snapshot)
+CREATE TABLE exam_question_sources (
+    id TEXT PRIMARY KEY,
+    question_id TEXT NOT NULL REFERENCES exam_questions(id) ON DELETE CASCADE,
+    chunk_id TEXT REFERENCES chunks(id) ON DELETE SET NULL,
+    original_chunk_id TEXT NOT NULL,
+    document_title TEXT NOT NULL,
+    location_type TEXT NOT NULL,
+    location_index INTEGER NOT NULL,
+    location_title TEXT,
+    excerpt TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Learner Profile Table (Local Single-User Identity)
+CREATE TABLE learner_profile (
+    id TEXT PRIMARY KEY,
+    learner_id TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Concepts Table (Course-Scoped Concept Catalog)
+CREATE TABLE concepts (
     id TEXT PRIMARY KEY,
     course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
-    topic_tag TEXT NOT NULL,
-    mastery_score REAL NOT NULL DEFAULT 0.5, -- Range 0.0 (novice) to 1.0 (master)
-    confidence_interval REAL NOT NULL DEFAULT 0.5,
-    total_attempts INTEGER DEFAULT 0,
-    successful_attempts INTEGER DEFAULT 0,
-    last_tested_at TIMESTAMP,
+    name TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    description TEXT,
+    provenance TEXT NOT NULL DEFAULT 'manual',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(course_id, topic_tag)
+    UNIQUE(course_id, normalized_name)
+);
+
+-- Question-to-Concept Junction Table
+CREATE TABLE question_concepts (
+    id TEXT PRIMARY KEY,
+    question_id TEXT NOT NULL REFERENCES exam_questions(id) ON DELETE CASCADE,
+    concept_id TEXT NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(question_id, concept_id)
+);
+
+-- Concept-to-Chunk Grounding Junction Table
+CREATE TABLE concept_chunks (
+    id TEXT PRIMARY KEY,
+    concept_id TEXT NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+    chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(concept_id, chunk_id)
+);
+
+-- Concept Mastery Table (Laplace Smoothed Estimates & Categories)
+CREATE TABLE concept_mastery (
+    id TEXT PRIMARY KEY,
+    learner_id TEXT NOT NULL REFERENCES learner_profile(learner_id) ON DELETE CASCADE,
+    concept_id TEXT NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+    course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+    mastery_score REAL NOT NULL DEFAULT 0.5,
+    uncertainty REAL NOT NULL DEFAULT 0.2887,
+    observation_count INTEGER NOT NULL DEFAULT 0,
+    correct_count INTEGER NOT NULL DEFAULT 0,
+    incorrect_count INTEGER NOT NULL DEFAULT 0,
+    partial_score_sum REAL NOT NULL DEFAULT 0.0,
+    category TEXT NOT NULL DEFAULT 'unassessed',
+    last_assessed_at TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(learner_id, concept_id)
+);
+
+-- Learner Activity Events Table (Chronological Study Log)
+CREATE TABLE learner_events (
+    id TEXT PRIMARY KEY,
+    learner_id TEXT NOT NULL REFERENCES learner_profile(learner_id) ON DELETE CASCADE,
+    course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+    concept_id TEXT REFERENCES concepts(id) ON DELETE SET NULL,
+    event_type TEXT NOT NULL,
+    attempt_id TEXT REFERENCES exam_attempts(id) ON DELETE CASCADE,
+    question_id TEXT REFERENCES exam_questions(id) ON DELETE SET NULL,
+    score_earned REAL,
+    score_possible REAL,
+    is_correct BOOLEAN,
+    metadata_json TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Review Tasks Table (Bounded Spaced-Repetition Review Queue)
+CREATE TABLE review_tasks (
+    id TEXT PRIMARY KEY,
+    learner_id TEXT NOT NULL REFERENCES learner_profile(learner_id) ON DELETE CASCADE,
+    course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+    concept_id TEXT NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+    due_date TIMESTAMP NOT NULL,
+    interval_days INTEGER NOT NULL DEFAULT 1,
+    ease_factor REAL NOT NULL DEFAULT 2.5,
+    repetition_count INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'scheduled',
+    last_reviewed_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(learner_id, concept_id)
 );
 ```
 
