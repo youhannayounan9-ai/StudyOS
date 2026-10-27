@@ -20,6 +20,8 @@ dist/
 
 # Local databases, storage, and application data
 data/
+chroma/
+.chroma/
 *.db
 *.db-wal
 *.db-shm

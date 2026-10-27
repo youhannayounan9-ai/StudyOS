@@ -1,7 +1,7 @@
 # StudyOS — Staged Development Roadmap & Execution Plan
 
 - **Document Version:** 1.0.0
-- **Status:** Approved Baseline (Committed at 1827f1a) | Stage 1 Complete & Approved (Stage 2 Next)
+- **Status:** Approved Baseline (Committed at 1827f1a) | Stage 1 Complete & Approved (Committed at 84db803) | Stage 2 Implementation in review
 - **System Target:** Local-First Personalized Learning Operating System
 - **Hardware Profile:** Windows 11 | NVIDIA RTX 5060 Laptop GPU (8 GB VRAM) | 16 GB System RAM
 
@@ -14,7 +14,7 @@ StudyOS follows a disciplined, stage-gated engineering methodology:
 2. **First Usable Release Prioritization:** Stages 0 through 4 deliver the foundational, fully functional local study loop (Ingest $\rightarrow$ Retrieve $\rightarrow$ Tutor with Citations $\rightarrow$ Exam & Grade). Stages 5 through 7 enrich the cognitive modeling, adaptation, and system hardening.
 3. **Realistic Verification Time:** Hour estimates explicitly include debugging on Windows, edge-case testing, citation auditing, and learning curves.
 4. **No Premature Optimization:** Architectural modularity is established early, but complex features (e.g., cross-encoders, multimodal vision, external research) are gated behind stable core baselines.
-5. **Explicit Git Commit Checkpoints:** Work for each stage is reviewed and verified in the local working tree before being committed as a permanent baseline. Stage 0 documentation was approved and committed as baseline commit `1827f1a`; Stage 1 ingestion engine is approved and complete with 53 automated tests passing; Stage 2 hybrid retrieval is next.
+5. **Explicit Git Commit Checkpoints:** Work for each stage is reviewed and verified in the local working tree before being committed as a permanent baseline. Stage 0 documentation was approved and committed as baseline commit `1827f1a`; Stage 1 ingestion engine is approved and committed as baseline commit `84db803`; Stage 2 hybrid retrieval is currently implemented and under review.
 
 ---
 

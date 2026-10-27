@@ -18,6 +18,11 @@ from studyos.ingestion.models import (
 from studyos.ingestion.parsers import get_parser_for_file
 from studyos.storage.db import Database
 
+# Type check import for ChromaVectorStore without cyclic imports
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from studyos.retrieval.vector_store import ChromaVectorStore
+
 logger = logging.getLogger("studyos.ingestion")
 
 
@@ -31,6 +36,7 @@ class IngestionService:
     3. Parsing into normalized PageElement structures.
     4. Structure-aware chunking with breadcrumb header injection.
     5. Atomic SQLite transactional persistence and trigger-based FTS5 sync.
+    6. Optional asynchronous/post-commit vector index synchronization.
     """
 
     def __init__(
@@ -38,9 +44,11 @@ class IngestionService:
         db: Database,
         config: AppConfig | None = None,
         chunker: StructureAwareChunker | None = None,
+        vector_store: ChromaVectorStore | None = None,
     ) -> None:
         self.db = db
         self.config = config or get_default_config()
+        self.vector_store = vector_store
         self.chunker = chunker or StructureAwareChunker(
             target_chunk_size=self.config.chunk_size_tokens,
             chunk_overlap=self.config.chunk_overlap_tokens,
@@ -155,11 +163,25 @@ class IngestionService:
             len(chunks),
         )
 
+        all_warnings = list(parsed_doc.warnings)
+
+        # 4. Optional Post-Commit Vector Index Synchronization
+        if self.vector_store is not None:
+            try:
+                self.vector_store.sync(self.db)
+                logger.info("Successfully synchronized vector index for document %s", doc.id)
+            except Exception as e:
+                logger.warning("Vector indexing failed after document ingestion: %s", e)
+                all_warnings.append(
+                    f"SQLite ingestion succeeded, but vector indexing failed ({type(e).__name__}: {e}). "
+                    f"Run 'python scripts/sync_index.py --sync' to reconcile vector store."
+                )
+
         return IngestionResult(
             document_id=doc.id,
             status="ready",
             sha256_hash=sha256_hash,
             element_count=len(parsed_doc.elements),
             chunk_count=len(chunks),
-            warnings=parsed_doc.warnings,
+            warnings=all_warnings,
         )

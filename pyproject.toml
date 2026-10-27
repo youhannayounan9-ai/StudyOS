@@ -13,8 +13,8 @@ dependencies = [
     "python-docx>=1.1.0",
     "python-pptx>=1.0.0",
     "pydantic>=2.0.0",
-    "chromadb",
-    "httpx",
+    "chromadb>=1.5.9",
+    "httpx>=0.28.1",
 ]
 
 [project.optional-dependencies]
