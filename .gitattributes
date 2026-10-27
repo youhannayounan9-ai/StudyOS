@@ -1,0 +1,4 @@
+# Preserve line endings and declare binary file formats
+*.pdf binary
+*.docx binary
+*.pptx binary

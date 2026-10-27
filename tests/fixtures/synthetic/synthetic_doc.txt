@@ -1,0 +1,10 @@
+# Computer Systems: Memory Hierarchy
+
+Modern computer architectures employ multi-level cache hierarchies: L1, L2, and L3 caches.
+Cache misses incur main memory latency (approximately 50–100 ns).
+
+## Virtual Memory and Paging
+
+Virtual memory provides process isolation using page tables.
+Translation Lookaside Buffers (TLB) accelerate virtual-to-physical address mapping.
+Mathematical latency model: Δt = α · tc + (1 - α) · tm.

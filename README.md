@@ -6,20 +6,20 @@ StudyOS is an intelligent personal study environment designed for computer scien
 
 ---
 
-## Current Status: Stage 0 in Review (Architecture & Specification Drafted)
+## Current Status: Stage 1 Complete & Approved (Stage 2: Hybrid Retrieval Next)
 
-StudyOS is developed under a disciplined, incremental engineering roadmap. Stage 0 documentation has been drafted and is currently undergoing review. Once final review approval is received, the documentation suite will be committed to Git as a stable baseline commit before beginning Stage 1.
+StudyOS is developed under a disciplined, incremental engineering roadmap. Stage 0 (Architecture & Specification) and Stage 1 (Document Ingestion, Parsing & Normalization Engine) are complete and approved with 53 automated tests passing. Stage 2 (Hybrid Retrieval & Evidence Grounding Engine) is the next milestone.
 
-- [ ] **Stage 0: Architecture & Specification** *(Drafted — Awaiting Final Approval)*
-- [ ] **Stage 1: Document Ingestion, Parsing & Normalization Engine** *(Upcoming)*
-- [ ] **Stage 2: Hybrid Retrieval & Evidence Grounding Engine**
+- [x] **Stage 0: Architecture & Specification** *(Approved & Baseline Committed at `1827f1a`)*
+- [x] **Stage 1: Document Ingestion, Parsing & Normalization Engine** *(Approved & Complete with 53 tests passing)*
+- [ ] **Stage 2: Hybrid Retrieval & Evidence Grounding Engine** *(Next Stage)*
 - [ ] **Stage 3: AI Tutor & Grounded Interactive Answering**
 - [ ] **Stage 4: Exam Generation, Submission & Automated Grading Engine**
 - [ ] **Stage 5: Persistent Learner Model & Mistake Analytics**
 - [ ] **Stage 6: Adaptive Learning, Spaced Repetition & External Research**
 - [ ] **Stage 7: Comprehensive Evaluation, Security & Portfolio Polish**
 
-*Note: In accordance with Stage 0 constraints, the documentation files remain uncommitted in the local working tree. No application code has been implemented and no third-party packages or models have been downloaded.*
+*Note: In accordance with Stage 1 scope, the ingestion engine, format parsers (PDF with encryption rejection, DOCX, PPTX with slide table extraction, TXT), structure-aware chunker with loop progress guarantees, SQLite storage layer with atomic force-reindex and trigger-based FTS5 sync, and test suites are verified with 53/53 tests passing.*
 
 ---
 
