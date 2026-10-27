@@ -6,20 +6,20 @@ StudyOS is an intelligent personal study environment designed for computer scien
 
 ---
 
-## Current Status: Stage 3 — Implementation in review (Tutor & Evidence-Grounded Answer Engine)
+## Current Status: Stage 4 — Implementation in review (Exam & Assessment Generation Engine)
 
-StudyOS is developed under a disciplined, incremental engineering roadmap. Stage 0 (Architecture & Specification), Stage 1 (Document Ingestion Engine), and Stage 2 (Hybrid Retrieval & Evidence Grounding Engine) are complete and committed to the baseline. Stage 3 (AI Tutor & Grounded Interactive Answering) is implemented and verified with 144 automated tests passing, currently undergoing review.
+StudyOS is developed under a disciplined, incremental engineering roadmap. Stage 0 (Architecture & Specification), Stage 1 (Document Ingestion Engine), Stage 2 (Hybrid Retrieval & Evidence Grounding Engine), and Stage 3 (AI Tutor & Grounded Interactive Answering) are complete and committed to the baseline. Stage 4 (Exam Generation, Submission & Automated Grading Engine) is implemented and verified with 166 automated tests passing, currently undergoing review.
 
 - [x] **Stage 0: Architecture & Specification** *(Approved & Baseline Committed at `1827f1a`)*
 - [x] **Stage 1: Document Ingestion, Parsing & Normalization Engine** *(Approved & Baseline Committed at `84db803`)*
 - [x] **Stage 2: Hybrid Retrieval & Evidence Grounding Engine** *(Approved & Baseline Committed at `7026c4c`)*
-- [ ] **Stage 3: AI Tutor & Grounded Interactive Answering** *(Implementation in review)*
-- [ ] **Stage 4: Exam Generation, Submission & Automated Grading Engine** *(Upcoming)*
-- [ ] **Stage 5: Persistent Learner Model & Mistake Analytics**
+- [x] **Stage 3: AI Tutor & Grounded Interactive Answering** *(Approved & Baseline Committed at `3d9e26e`)*
+- [ ] **Stage 4: Exam Generation, Submission & Automated Grading Engine** *(Implementation in review)*
+- [ ] **Stage 5: Persistent Learner Model & Mistake Analytics** *(Upcoming)*
 - [ ] **Stage 6: Adaptive Learning, Spaced Repetition & External Research**
 - [ ] **Stage 7: Comprehensive Evaluation, Security & Portfolio Polish**
 
-*Note: In accordance with Stage 3 scope, the local tutor engine answers student questions grounded strictly in uploaded course materials retrieved via hybrid search (FTS5 + ChromaDB). Citations are bound to application-owned evidence markers (`[E1]`, `[E2]`) and resolved directly to authoritative SQLite metadata (filename, page/slide). If evidence is missing or insufficient, the tutor explicitly abstains.*
+*Note: In accordance with Stage 4 scope, the assessment engine generates structured practice exams (MCQ, True/False, and Short-Answer) grounded strictly in course materials retrieved via hybrid search. The public student taking view guarantees zero leakage of answer keys or explanations. Submissions are scored deterministically, with full explanations and verified source citations provided upon completion.*
 
 ---
 
@@ -220,6 +220,32 @@ Query the AI Tutor using hybrid retrieval over your course materials, with valid
 .\.venv\Scripts\python.exe scripts/ask_studyos.py --query "Explain Dijkstra" --fake-chat --fake-embeddings
 ```
 
+#### E. Generating, Taking, and Grading Practice Exams (`scripts/exams.py`)
+StudyOS provides a complete, local-first assessment CLI without requiring a web interface:
+```powershell
+# 1. Generate an exam grounded in course materials
+.\.venv\Scripts\python.exe scripts/exams.py generate --course "CS101" --count 5 --types mcq,true_false,short_answer --difficulty medium --title "CS101 Midterm Prep"
+
+# Scoped to a specific topic or document
+.\.venv\Scripts\python.exe scripts/exams.py generate --course "CS101" --topic "Graph Algorithms" --count 3 --types mcq
+
+# 2. List saved exams
+.\.venv\Scripts\python.exe scripts/exams.py list --course "CS101"
+
+# 3. Take an exam (public view with ZERO answer-key leakage)
+.\.venv\Scripts\python.exe scripts/exams.py take --exam-id "<EXAM_ID>"
+
+# 4. Submit answers from a JSON file (unanswered questions receive 0.0 with clear feedback)
+# Example answers JSON format: {"q_1": "A", "q_2": "True", "q_3": "Dynamic programming memoization"}
+.\.venv\Scripts\python.exe scripts/exams.py submit --exam-id "<EXAM_ID>" --answers-file answers.json
+
+# 5. View results, score breakdown, explanations, and verified source citations
+.\.venv\Scripts\python.exe scripts/exams.py results --attempt-id "<ATTEMPT_ID>"
+
+# Offline test using deterministic fake chat and embeddings (no Ollama required)
+.\.venv\Scripts\python.exe scripts/exams.py generate --course "CS101" --count 2 --fake-chat --fake-embeddings
+```
+
 ---
 
 ### 5. Stage 3 Grounding Architecture & Citation Provenance
@@ -284,7 +310,62 @@ Query the AI Tutor using hybrid retrieval over your course materials, with valid
 
 ---
 
-### 6. Partial Failure Handling & Index Recovery
+### 6. Stage 4 Exam Generation & Assessment Engine Architecture
+
+```
+                 Exam Generation Request
+       (course, topic, question count, difficulty, types)
+                           │
+                           ▼
+              [Hybrid Retrieval & Evidence Selection]
+         - Course and document scoping enforced in SQLite & FTS5
+         - Assign application-owned markers: [E1], [E2]...
+         - XML encapsulation of untrusted passage text
+                           │
+                           ▼
+             [Structured Ollama Generation]
+          (qwen2.5:7b with low temperature & JSON schema)
+                           │
+                           ▼
+          [Rigorous Python/Pydantic Validation]
+         - MCQ: exactly one valid choice marked correct
+         - True/False: boolean correctness normalization
+         - Short-Answer: reference solution + multi-criteria rubric
+         - Provenance: all cited markers must belong to active evidence
+         - Deduplication: reject identical/near-identical stems
+         - Bounded single retry on malformed JSON
+                           │
+                           ▼
+           [Atomic SQLite Persistence (WAL)]
+        - Store full exam, questions, source refs atomically
+        - Never store model-generated database IDs
+                           │
+        ┌──────────────────┴──────────────────┐
+        ▼                                     ▼
+ [Public Exam View]                    [Attempt Submission]
+- Exclude correct_answer,             - Validate question IDs belong to exam
+  explanation, and rubric             - Atomic attempt creation
+- Leak-proof taking view              - Deterministic MCQ & True/False grading
+                                      - Skipped questions scored 0.0
+                                      - Conservative Short-Answer manual review
+                                        or local model evaluation
+                                              │
+                                              ▼
+                                 [Grounded Post-Exam Results]
+                                - Earned score, percentage, feedback
+                                - Explanations resolved to SQLite chunks
+                                - Stale-chunk detection if sources deleted
+```
+
+- **Answer-Key Confidentiality**: The assessment architecture strictly separates internal question models (`ExamQuestion`) from public presentation models (`PublicQuestion`, `PublicExam`). Methods providing exams for taking (`get_exam_for_taking`) strip `correct_answer`, `reference_answer`, `rubric`, and `explanation`. Serialization tests verify that zero key data appears in JSON outputs or serialized states prior to submission.
+- **Deterministic Objective Grading**: MCQ and True/False questions are graded deterministically against the stored answer key. Unanswered questions score 0.0 with clear feedback (`"Question was skipped."`).
+- **Truthful Grading States & Pending Manual Review**: Short-answer questions awaiting grading have status `pending_manual_review` and unawarded points set to `None`, never a false score of `0.0`. If any question remains pending review, the overall exam attempt has status `pending_review` with final `score = None` and `percentage = None`. An explicit `provisional_score` and `provisional_percentage` subtotal are exposed for already-graded objective questions.
+- **Instructor Manual-Review Completion**: The CLI provides a dedicated `review` subcommand (`python scripts/exams.py review --attempt-id <id> --question-id <id> --score <pts> --feedback "..."`) that records verified scores within question point bounds and transitions attempts to `completed` without permitting modifications to stored questions, answer keys, or rubrics.
+- **Historical Citation Lifecycle & Stale Detection**: `exam_question_sources` persists an immutable provenance snapshot (`original_chunk_id`, filename, location type/index/title, excerpt) alongside a nullable foreign key (`chunk_id REFERENCES chunks(id) ON DELETE SET NULL`). While the source chunk exists, current SQLite metadata is authoritative. If the chunk or parent document is deleted, the historical snapshot is preserved, the citation is marked `is_stale = True` (`chunk_id = None`), and the exam questions, answer keys, and past attempt results remain completely uncorrupted.
+
+---
+
+### 7. Partial Failure Handling & Index Recovery
 - **Non-blocking Indexing**: Ingestion transactions in SQLite commit independently. If vector embedding or ChromaDB indexing fails post-commit (e.g., if Ollama is paused or out of memory), the SQLite document and chunk data remain intact.
 - **Actionable Warnings**: The ingestion pipeline logs a partial failure warning with the exact recovery command.
 - **Idempotent Repair**: Running `python scripts/sync_index.py --sync` safely catches up unsynced chunks without duplicating or corrupting existing embeddings.
@@ -292,10 +373,10 @@ Query the AI Tutor using hybrid retrieval over your course materials, with valid
 
 ---
 
-### 7. Automated Testing Without Ollama
+### 8. Automated Testing Without Ollama
 The entire test suite is 100% deterministic and runs completely offline without requiring a running Ollama daemon or downloading models:
 - **Fake Embeddings**: Unit and integration tests inject `FakeEmbeddingProvider`, generating deterministic 384-dimensional vectors from SHA-256 hashes.
-- **Fake Chat Provider**: Tutor tests inject `FakeChatProvider`, supporting queued responses, citation verification, and error simulation.
+- **Fake Chat Provider**: Tutor and exam tests inject `FakeChatProvider`, supporting queued responses, citation verification, and error simulation.
 - **Mock HTTP Layer**: Ollama API network tests simulate responses, timeouts, connection errors, and malformed JSON using mocked HTTP transports.
 - **Temporary Storage**: All tests run against ephemeral SQLite databases and temporary directories for ChromaDB.
 
@@ -306,9 +387,11 @@ Run the complete test suite:
 
 ---
 
-### 8. Current Known Limitations
+### 9. Current Known Limitations
 - **Citation Provenance vs. Claim Entailment**: The application strictly validates citation reference provenance (guaranteeing that every citation resolves to a real SQLite chunk retrieved for that query and rejecting invented markers). However, syntactic citation validation does not mathematically prove logical entailment of the generated claim. Formal natural language inference (NLI) evaluation is reserved for Stage 7.
-- **Ollama Prerequisite for Live Chat & Semantic Search**: Live interactive answering requires a local Ollama daemon serving `qwen2.5:7b` (for tutoring) and `all-minilm:latest` (for dense embeddings). When offline, the CLI operates in degraded mode or via the `--fake-chat` and `--fake-embeddings` flags.
+- **Assessment Structure vs. Pedagogical Validity**: The assessment engine deterministically validates question structure, schema, distractor uniqueness, single-correct-answer constraints, and evidence marker provenance. However, automated generation cannot guarantee pedagogical perfection or replace human instructor review.
+- **Conservative Short-Answer Grading**: Open-ended question grading defaults to manual instructor review when offline to prevent hallucinated scoring. Automated model grading is strictly bounded by max points and criterion rubrics.
+- **Ollama Prerequisite for Live Chat & Semantic Search**: Live interactive answering requires a local Ollama daemon serving `qwen2.5:7b` (for tutoring/exams) and `all-minilm:latest` (for dense embeddings). When offline, the CLI operates in degraded mode or via the `--fake-chat` and `--fake-embeddings` flags.
 - **Single-Turn Scoped Q&A**: Stage 3 implements stateless, evidence-grounded single-turn question answering. Multi-turn dialogue and persistent learner memory are planned for Stage 5.
 - **Prompt Injection Defense in Depth**: Delimitation, system instruction separation, and token extraction provide robust defense against document-borne instructions, but prompt-injection defense remains defense-in-depth rather than a mathematical guarantee against language model non-determinism.
 

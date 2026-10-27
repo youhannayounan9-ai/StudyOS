@@ -1,7 +1,7 @@
 # StudyOS — Staged Development Roadmap & Execution Plan
 
 - **Document Version:** 1.0.0
-- **Status:** Approved Baseline (Committed at 1827f1a) | Stage 1 Complete & Approved (Committed at 84db803) | Stage 2 Complete & Approved (Committed at 7026c4c) | Stage 3 Implementation in review
+- **Status:** Approved Baseline (Committed at 1827f1a) | Stage 1 Complete & Approved (Committed at 84db803) | Stage 2 Complete & Approved (Committed at 7026c4c) | Stage 3 Complete & Approved (Committed at 3d9e26e) | Stage 4 Implementation in review
 - **System Target:** Local-First Personalized Learning Operating System
 - **Hardware Profile:** Windows 11 | NVIDIA RTX 5060 Laptop GPU (8 GB VRAM) | 16 GB System RAM
 
@@ -14,7 +14,7 @@ StudyOS follows a disciplined, stage-gated engineering methodology:
 2. **First Usable Release Prioritization:** Stages 0 through 4 deliver the foundational, fully functional local study loop (Ingest $\rightarrow$ Retrieve $\rightarrow$ Tutor with Citations $\rightarrow$ Exam & Grade). Stages 5 through 7 enrich the cognitive modeling, adaptation, and system hardening.
 3. **Realistic Verification Time:** Hour estimates explicitly include debugging on Windows, edge-case testing, citation auditing, and learning curves.
 4. **No Premature Optimization:** Architectural modularity is established early, but complex features (e.g., cross-encoders, multimodal vision, external research) are gated behind stable core baselines.
-5. **Explicit Git Commit Checkpoints:** Work for each stage is reviewed and verified in the local working tree before being committed as a permanent baseline. Stage 0 documentation was approved and committed as baseline commit `1827f1a`; Stage 1 ingestion engine is approved and committed as baseline commit `84db803`; Stage 2 hybrid retrieval is committed as baseline commit `7026c4c`; Stage 3 AI tutor is currently implemented and under review.
+5. **Explicit Git Commit Checkpoints:** Work for each stage is reviewed and verified in the local working tree before being committed as a permanent baseline. Stage 0 documentation was approved and committed as baseline commit `1827f1a`; Stage 1 ingestion engine is approved and committed as baseline commit `84db803`; Stage 2 hybrid retrieval is committed as baseline commit `7026c4c`; Stage 3 AI tutor is committed as baseline commit `3d9e26e`; Stage 4 assessment engine is currently implemented and under review.
 
 ---
 
@@ -110,7 +110,7 @@ StudyOS follows a disciplined, stage-gated engineering methodology:
 ---
 
 ### Stage 3: AI Tutor & Grounded Interactive Answering
-- **Status:** Implementation in review (144 automated tests passing).
+- **Status:** Complete & Approved (Committed at `3d9e26e`).
 - **Scope:** Build the local model inference wrapper (`studyos.inference`) connecting to Ollama (`qwen2.5:7b`) with pre-flight connectivity checks and local loopback validation. Implement the evidence-grounded tutoring service (`studyos.tutoring`). Build prompt templates that enclose untrusted text in `<evidence_context>` delimiters, assign temporary evidence markers (`[E1]`, `[E2]`), and resolve validated markers to trusted database metadata. Implement operational CLI (`scripts/ask_studyos.py`) with honest degraded-mode reporting and abstention.
 - **Explicit Non-Goals:** Exam generation, grading rubrics, automated learner modeling, Streamlit UI (deferred to UI phase).
 - **Expected Deliverables:**
@@ -132,32 +132,45 @@ StudyOS follows a disciplined, stage-gated engineering methodology:
   - Tutor answers reference valid application evidence markers (`[E1]`, `[E2]`) that resolve to verified source chunks from the selected document set; any unmapped or hallucinated marker is rejected.
   - When asked about a concept not present in selected materials or when retrieval returns 0 chunks, tutor explicitly outputs the standard refusal message.
   - 100% offline test suite execution with zero cloud calls or model downloads.
-- **Estimated Focused Hours:** 16–24 hours (Uncertainty: $\pm 25\%$).
+- **Estimated Focused Hours:** 16–24 hours (Completed in Stage 3).
 - **Dependencies:** Stage 2.
 
 ---
 
 ### Stage 4: Exam Generation, Submission & Automated Grading Engine
-- **Scope:** Implement the assessment engine. Enable students to configure exams (question count, difficulty, target documents). Generate Multiple Choice Questions (MCQ) and Short-Answer Questions using constrained JSON output from Ollama. Implement secure backend storage of answer keys (preventing DOM leakage). Build the interactive exam UI, scoring engine, automated explanations, and mistake recording.
-- **Explicit Non-Goals:** Spaced repetition scheduling, cross-course mastery decay modeling.
+- **Status:** Implementation in review (175 automated tests passing).
+- **Scope:** Build a dependable, local-first assessment engine that generates customized practice exams (Multiple Choice, True/False, and Short-Answer) from course materials using hybrid retrieval, assigned evidence markers, and local Ollama inference. Enforce answer-key confidentiality via public exam views (`PublicExam`) that strictly omit correct answers, reference answers, explanations, and rubrics. Store exams, questions, and attempts persistently in SQLite using migrations `0003_assessment_engine.sql`, `0004_grading_states_and_citation_snapshots.sql`, and `0005_source_reference_set_null.sql`. Implement deterministic objective grading, skipped-question scoring (0.0), and conservative short-answer manual review/model evaluation. Provide post-submission results grounded in verified SQLite chunk metadata with stale-chunk detection.
+- **Explicit Non-Goals:** Web/Streamlit UI (deferred), persistent learner mastery graphs, spaced repetition scheduling, or cross-course skill tracking (reserved for Stage 5).
 - **Expected Deliverables:**
-  - `studyos.assessment.generator`: Exam generator with schema validation.
-  - `studyos.assessment.grader`: Deterministic MCQ grader and LLM rubric evaluator for short answers.
-  - `studyos.ui.pages.exam`: Streamlit exam builder and live quiz interface.
-  - SQLite schema updates: `exam_definitions`, `exam_questions`, `exam_attempts`, `question_attempts`.
-  - Automated tests: `tests/unit/test_exam_generator.py`, `tests/unit/test_grader.py`.
-- **Prerequisites:** Stage 3 complete; reliable JSON mode inference from local model.
+  - `studyos.storage.migrations.0003_assessment_engine.sql`: Normalized tables (`exams`, `exam_questions`, `exam_question_sources`, `exam_attempts`, `question_attempts`) with foreign keys, indexes, and cascade behavior.
+  - `studyos.storage.migrations.0004_grading_states_and_citation_snapshots.sql`: Upgrades schema with provisional scores, explicit grading statuses, and historical citation snapshots.
+  - `studyos.storage.migrations.0005_source_reference_set_null.sql`: Rebuilds exam_question_sources to enforce ON DELETE SET NULL on chunk foreign keys, ensuring historical citations survive chunk deletion.
+  - `studyos.assessment.models`: Pydantic domain models for requests, questions, public taking views, attempts, submissions, and grading results.
+  - `studyos.assessment.prompt`: Exam generation prompt with XML evidence encapsulation and JSON schema instructions.
+  - `studyos.assessment.validator`: Rigorous structural and semantic validator (MCQ single correct choice, distinct choices, boolean normalization, marker validation, deduplication).
+  - `studyos.assessment.repository`: Transactional persistence, leak-proof public retrieval, atomic attempt recording, and stale chunk detection.
+  - `studyos.assessment.grader`: Deterministic objective grader and conservative short-answer evaluation.
+  - `studyos.assessment.generator`: End-to-end exam generator with hybrid retrieval, bounded correction retries, and atomic persistence.
+  - `studyos.assessment.service`: High-level assessment service unifying generation, taking, submission, and grading.
+  - `scripts/exams.py`: Operational assessment CLI (`generate`, `list`, `take`, `submit`, `results`, `review`).
+  - Unit and integration tests: `tests/unit/test_exam_models_and_validation.py`, `tests/unit/test_exam_repository_and_security.py`, `tests/unit/test_exam_grading.py`, `tests/integration/test_assessment_pipeline.py`.
+- **Prerequisites:** Stage 3 complete; reliable JSON mode inference from local model or offline fake chat provider.
 - **Risks:**
-  - LLM emitting malformed JSON or invalid schema for questions.
-  - Plausibility of distractors being too obvious or ambiguous.
+  - Distractor ambiguity or duplicate options (mitigated by strict validation rules).
+  - Answer-key leakage prior to attempt submission (mitigated by separate public models).
+  - Short-answer scoring hallucination (mitigated by conservative manual review fallback and bounded rubrics).
 - **Verification Commands & Procedures:**
-  - Run exam test suite: `pytest tests/unit/test_exam_generator.py tests/unit/test_grader.py -v`.
-  - End-to-end exam flow in UI: Generate 5-question MCQ exam $\rightarrow$ verify answer keys absent from frontend state $\rightarrow$ submit answers $\rightarrow$ verify score and citation feedback.
+  - Run full test suite: `pytest -v`.
+  - Assessment unit tests: `pytest tests/unit/test_exam_*.py -v`.
+  - Assessment pipeline integration test: `pytest tests/integration/test_assessment_pipeline.py -v`.
+  - Operational CLI demo: `python scripts/exams.py --help`.
 - **Acceptance Criteria:**
-  - 5-question exam generates in under 60 seconds with 100% valid JSON parsing.
-  - Correct answers are inaccessible prior to submission.
-  - Scoring calculates accurately, persists to SQLite, and displays source citations for every question.
-- **Estimated Focused Hours:** 18–26 hours (Uncertainty: $\pm 25\%$).
+  - Complete, coherent assessment lifecycle without web UI (generate, list, take, submit, grade, view results).
+  - Public exam models serialize 0 answer keys, reference answers, explanations, or rubrics.
+  - Objective grading (MCQ, True/False) is 100% deterministic; skipped questions score 0.0 with clear feedback.
+  - Generated questions cite valid application-assigned evidence markers resolving to SQLite chunk metadata.
+  - 100% offline test suite execution with 175 passing tests.
+- **Estimated Focused Hours:** 18–26 hours (Completed in Stage 4).
 - **Dependencies:** Stage 3.
 
 ---
