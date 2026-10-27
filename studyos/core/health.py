@@ -38,13 +38,14 @@ class OllamaHealthReport(BaseModel):
 
 def check_ollama_health(
     config: AppConfig | None = None,
+    model_name: str | None = None,
     timeout_seconds: float = 3.0,
     client: httpx.Client | None = None,
 ) -> OllamaHealthReport:
-    """Check connectivity to Ollama daemon and verify embedding model presence."""
+    """Check connectivity to Ollama daemon and verify model presence (embedding or tutor)."""
     cfg = config or get_default_config()
     base_url = cfg.ollama_base_url.rstrip("/")
-    target_model = cfg.embedding_model
+    target_model = model_name or cfg.embedding_model
 
     should_close = client is None
     http_client = client or httpx.Client(
@@ -96,7 +97,7 @@ def check_ollama_health(
                     model_name=target_model,
                     version=version,
                     installed_models=installed,
-                    message=f"Ollama is running, but required embedding model '{target_model}' is not installed.",
+                    message=f"Ollama is running, but required model '{target_model}' is not installed.",
                     actionable_remediation=(
                         f"Install the model locally using: 'ollama pull {target_model}'\n"
                         f"Currently available models: {', '.join(installed) if installed else 'None'}"

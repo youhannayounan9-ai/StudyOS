@@ -6,20 +6,20 @@ StudyOS is an intelligent personal study environment designed for computer scien
 
 ---
 
-## Current Status: Stage 2 — Implementation in review (Hybrid Retrieval & Evidence Grounding Engine)
+## Current Status: Stage 3 — Implementation in review (Tutor & Evidence-Grounded Answer Engine)
 
-StudyOS is developed under a disciplined, incremental engineering roadmap. Stage 0 (Architecture & Specification) and Stage 1 (Document Ingestion Engine) are complete and committed to the baseline. Stage 2 (Hybrid Retrieval & Evidence Grounding Engine) is implemented and verified with 96 automated tests passing, currently undergoing review.
+StudyOS is developed under a disciplined, incremental engineering roadmap. Stage 0 (Architecture & Specification), Stage 1 (Document Ingestion Engine), and Stage 2 (Hybrid Retrieval & Evidence Grounding Engine) are complete and committed to the baseline. Stage 3 (AI Tutor & Grounded Interactive Answering) is implemented and verified with 144 automated tests passing, currently undergoing review.
 
 - [x] **Stage 0: Architecture & Specification** *(Approved & Baseline Committed at `1827f1a`)*
 - [x] **Stage 1: Document Ingestion, Parsing & Normalization Engine** *(Approved & Baseline Committed at `84db803`)*
-- [ ] **Stage 2: Hybrid Retrieval & Evidence Grounding Engine** *(Implementation in review)*
-- [ ] **Stage 3: AI Tutor & Grounded Interactive Answering** *(Upcoming)*
-- [ ] **Stage 4: Exam Generation, Submission & Automated Grading Engine**
+- [x] **Stage 2: Hybrid Retrieval & Evidence Grounding Engine** *(Approved & Baseline Committed at `7026c4c`)*
+- [ ] **Stage 3: AI Tutor & Grounded Interactive Answering** *(Implementation in review)*
+- [ ] **Stage 4: Exam Generation, Submission & Automated Grading Engine** *(Upcoming)*
 - [ ] **Stage 5: Persistent Learner Model & Mistake Analytics**
 - [ ] **Stage 6: Adaptive Learning, Spaced Repetition & External Research**
 - [ ] **Stage 7: Comprehensive Evaluation, Security & Portfolio Polish**
 
-*Note: In accordance with Stage 2 scope, the hybrid retrieval engine combines SQLite FTS5 BM25 lexical ranking with local ChromaDB dense semantic vector search via Reciprocal Rank Fusion (RRF, k=60). All returned chunks are strictly validated and enriched against SQLite authoritative relational records.*
+*Note: In accordance with Stage 3 scope, the local tutor engine answers student questions grounded strictly in uploaded course materials retrieved via hybrid search (FTS5 + ChromaDB). Citations are bound to application-owned evidence markers (`[E1]`, `[E2]`) and resolved directly to authoritative SQLite metadata (filename, page/slide). If evidence is missing or insufficient, the tutor explicitly abstains.*
 
 ---
 
@@ -118,6 +118,12 @@ All settings can be configured via environment variables or loaded through `stud
 | Embedding Timeout | `STUDYOS_EMBEDDING_TIMEOUT_SECONDS` | `30.0` | Request timeout for embedding calls in seconds |
 | RRF Constant $k$ | `STUDYOS_RRF_K` | `60` | Rank smoothing parameter for Reciprocal Rank Fusion |
 | Anonymized Telemetry | `STUDYOS_ANONYMIZED_TELEMETRY` | `False` | External telemetry toggle (always disabled locally) |
+| Tutor Chat Model | `STUDYOS_TUTOR_MODEL` | `qwen2.5:7b` | Local Ollama chat model for evidence-grounded tutoring |
+| Tutor Temperature | `STUDYOS_TUTOR_TEMPERATURE` | `0.2` | Sampling temperature for factual explanations |
+| Tutor Max Tokens | `STUDYOS_TUTOR_MAX_TOKENS` | `1024` | Maximum tokens generated per answer |
+| Tutor Timeout | `STUDYOS_TUTOR_TIMEOUT_SECONDS` | `60.0` | Request timeout for local chat inference in seconds |
+| Tutor Evidence Limit | `STUDYOS_TUTOR_EVIDENCE_K` | `5` | Maximum evidence chunks provided in prompt context |
+| Tutor Relevance Threshold | `STUDYOS_TUTOR_MIN_RELEVANCE` | `0.01` | Minimum RRF relevance score before abstaining |
 
 ---
 
@@ -198,18 +204,98 @@ Run a hybrid search query with optional course and document filters:
 .\.venv\Scripts\python.exe scripts/test_retrieval.py --query "database index" --fake-embeddings
 ```
 
+#### D. Asking Questions with the Local AI Tutor
+Query the AI Tutor using hybrid retrieval over your course materials, with validated source citations:
+```powershell
+# Ask a conceptual question grounded in uploaded materials
+.\.venv\Scripts\python.exe scripts/ask_studyos.py --query "Explain Bellman-Ford algorithm"
+
+# Filter question answering to a specific course
+.\.venv\Scripts\python.exe scripts/ask_studyos.py --query "Explain asymptotic Big-O complexity" --course "CS101"
+
+# Select explanation style (balanced, concise, or detailed)
+.\.venv\Scripts\python.exe scripts/ask_studyos.py --query "How does virtual memory work?" --style detailed
+
+# Offline test using deterministic fake chat and embeddings (no Ollama required)
+.\.venv\Scripts\python.exe scripts/ask_studyos.py --query "Explain Dijkstra" --fake-chat --fake-embeddings
+```
+
 ---
 
-### 5. Partial Failure Handling & Index Recovery
+### 5. Stage 3 Grounding Architecture & Citation Provenance
+
+```
+                     Student Question
+                            │
+                            ▼
+               [Hybrid Retrieval Service]
+           (RRF: SQLite FTS5 + ChromaDB Vectors)
+                            │
+               ┌────────────┴────────────┐
+               ▼                         ▼
+      [No Chunks Found]          [Chunks Found]
+               │                         │
+               ▼                         ▼
+       [Honest Refusal]        [Application-Assigned Markers]
+      "The uploaded materials   Assign [E1], [E2]... mapped to
+       do not provide enough    authoritative SQLite chunks
+       evidence to answer..."            │
+                                         ▼
+                            [Prompt & Evidence Assembly]
+                            - Untrusted passages enclosed in
+                              <evidence_context><passage id="E1">
+                            - System instructions isolated
+                            - Strict citation mandate: cite only [E1]
+                                         │
+                                         ▼
+                            [Local Ollama Chat Provider]
+                            (qwen2.5:7b, low temperature)
+                                         │
+                                         ▼
+                            [Citation Extraction & Set Check]
+                            - Parse [E\d+] tokens from output
+                            - Validate: [E_i] ∈ active evidence set
+                            - Reject unverified markers (e.g. [E999])
+                                         │
+                         ┌───────────────┴───────────────┐
+                         ▼                               ▼
+                 [Valid Citations]             [Zero Valid Citations]
+                         │                               │
+                         │                     [Bounded Single Repair]
+                         │                     Re-prompt model with
+                         │                     citation reminder
+                         │                               │
+                         └───────────────┬───────────────┘
+                                         ▼
+                            [Authoritative Metadata Resolution]
+                            Resolve [E1] -> SQLite document filename,
+                            location (page/slide), chunk excerpt
+                                         │
+                                         ▼
+                                   [TutorResponse]
+                            Markdown Answer + Citation Drawer
+```
+
+1. **Application-Owned Evidence Markers**: The application maps top retrieved chunks to short temporary markers (`[E1]`, `[E2]`). The model is never permitted to choose the mapping or invent metadata.
+2. **Untrusted Content Encapsulation**: Document chunk texts are sanitized (neutralizing any premature `</passage>` or `</evidence_context>` tags) and wrapped in XML containers. System instructions strictly instruct the model to treat evidence text as passive study data, preventing prompt injection instructions from overriding tutor rules.
+3. **Strict Set-Membership Validation**: Model output tokens matching `\[(E\d+)\]` are extracted and checked against the active request's evidence map. Any marker outside the active candidate set (such as hallucinated `[E999]`) is rejected and recorded with a warning.
+4. **Authoritative Relational Resolution**: Valid citations populate display fields (filename, page/slide index, slide title, chunk excerpt) directly from SQLite relational records. Hallucinated filenames or page numbers emitted in model prose are never trusted as citation metadata.
+5. **Honest Grounding & Abstention**: If retrieval yields 0 matching chunks, the tutor abstains immediately with a clear refusal message without making an LLM generation call. If the model determines that retrieved evidence is insufficient, it emits an honest abstention and is marked `unsupported=True`.
+
+---
+
+### 6. Partial Failure Handling & Index Recovery
 - **Non-blocking Indexing**: Ingestion transactions in SQLite commit independently. If vector embedding or ChromaDB indexing fails post-commit (e.g., if Ollama is paused or out of memory), the SQLite document and chunk data remain intact.
 - **Actionable Warnings**: The ingestion pipeline logs a partial failure warning with the exact recovery command.
 - **Idempotent Repair**: Running `python scripts/sync_index.py --sync` safely catches up unsynced chunks without duplicating or corrupting existing embeddings.
+- **Degraded Lexical Answering**: If Ollama or ChromaDB is offline, the tutor answers using available lexical FTS5 evidence when adequate, honestly preserving the `DEGRADED_LEXICAL` mode indicator and diagnostic warnings.
 
 ---
 
-### 6. Automated Testing Without Ollama
-The entire test suite is deterministic and runs offline without requiring a running Ollama daemon or downloading models:
-- **Fake Embeddings**: Unit and integration tests inject `FakeEmbeddingProvider`, which generates deterministic 384-dimensional vectors based on input string hashes.
+### 7. Automated Testing Without Ollama
+The entire test suite is 100% deterministic and runs completely offline without requiring a running Ollama daemon or downloading models:
+- **Fake Embeddings**: Unit and integration tests inject `FakeEmbeddingProvider`, generating deterministic 384-dimensional vectors from SHA-256 hashes.
+- **Fake Chat Provider**: Tutor tests inject `FakeChatProvider`, supporting queued responses, citation verification, and error simulation.
 - **Mock HTTP Layer**: Ollama API network tests simulate responses, timeouts, connection errors, and malformed JSON using mocked HTTP transports.
 - **Temporary Storage**: All tests run against ephemeral SQLite databases and temporary directories for ChromaDB.
 
@@ -220,10 +306,11 @@ Run the complete test suite:
 
 ---
 
-### 7. Current Known Limitations
-- **Ollama Prerequisite for Live Semantic Retrieval**: Live semantic vector search requires a local Ollama daemon serving `all-minilm:latest`. If Ollama is offline, the hybrid engine operates in honest degraded mode (`DEGRADED_LEXICAL`) with an explicit warning, or fails gracefully if strict semantic retrieval was demanded.
-- **Cross-Lingual Embeddings**: The default model `all-minilm` is optimized for English technical prose. Multi-language course notes may exhibit lower semantic recall.
-- **In-Memory Query Re-Ranking**: RRF combines lexical and semantic rank lists. Cross-encoder re-ranking is reserved for later optimization stages.
+### 8. Current Known Limitations
+- **Citation Provenance vs. Claim Entailment**: The application strictly validates citation reference provenance (guaranteeing that every citation resolves to a real SQLite chunk retrieved for that query and rejecting invented markers). However, syntactic citation validation does not mathematically prove logical entailment of the generated claim. Formal natural language inference (NLI) evaluation is reserved for Stage 7.
+- **Ollama Prerequisite for Live Chat & Semantic Search**: Live interactive answering requires a local Ollama daemon serving `qwen2.5:7b` (for tutoring) and `all-minilm:latest` (for dense embeddings). When offline, the CLI operates in degraded mode or via the `--fake-chat` and `--fake-embeddings` flags.
+- **Single-Turn Scoped Q&A**: Stage 3 implements stateless, evidence-grounded single-turn question answering. Multi-turn dialogue and persistent learner memory are planned for Stage 5.
+- **Prompt Injection Defense in Depth**: Delimitation, system instruction separation, and token extraction provide robust defense against document-borne instructions, but prompt-injection defense remains defense-in-depth rather than a mathematical guarantee against language model non-determinism.
 
 ---
 

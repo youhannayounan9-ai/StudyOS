@@ -158,6 +158,40 @@ class AppConfig(BaseModel):
         description="Disable external ChromaDB telemetry to maintain 100% local privacy",
     )
 
+    # Stage 3: Local Tutor & Chat Model Configuration
+    tutor_model: str = Field(
+        default_factory=lambda: os.getenv("STUDYOS_TUTOR_MODEL", "qwen2.5:7b"),
+        description="Local Ollama chat model for evidence-grounded tutoring",
+    )
+    tutor_temperature: float = Field(
+        default=0.2,
+        description="Sampling temperature for tutor explanations (low temperature for factual precision)",
+        ge=0.0,
+        le=1.0,
+    )
+    tutor_max_tokens: int = Field(
+        default=1024,
+        description="Maximum tokens to generate for tutor answers",
+        ge=64,
+        le=4096,
+    )
+    tutor_timeout_seconds: float = Field(
+        default=60.0,
+        description="HTTP timeout in seconds for local chat requests",
+        ge=1.0,
+    )
+    tutor_evidence_k: int = Field(
+        default=5,
+        description="Maximum number of evidence chunks selected for tutor context",
+        ge=1,
+        le=20,
+    )
+    tutor_min_relevance_score: float = Field(
+        default=0.01,
+        description="Minimum RRF relevance score threshold before tutor considers evidence insufficient",
+        ge=0.0,
+    )
+
     @field_validator("chunk_overlap_tokens")
     @classmethod
     def validate_overlap(cls, v: int, info) -> int:

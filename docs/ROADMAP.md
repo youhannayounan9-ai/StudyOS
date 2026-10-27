@@ -1,7 +1,7 @@
 # StudyOS — Staged Development Roadmap & Execution Plan
 
 - **Document Version:** 1.0.0
-- **Status:** Approved Baseline (Committed at 1827f1a) | Stage 1 Complete & Approved (Committed at 84db803) | Stage 2 Implementation in review
+- **Status:** Approved Baseline (Committed at 1827f1a) | Stage 1 Complete & Approved (Committed at 84db803) | Stage 2 Complete & Approved (Committed at 7026c4c) | Stage 3 Implementation in review
 - **System Target:** Local-First Personalized Learning Operating System
 - **Hardware Profile:** Windows 11 | NVIDIA RTX 5060 Laptop GPU (8 GB VRAM) | 16 GB System RAM
 
@@ -14,7 +14,7 @@ StudyOS follows a disciplined, stage-gated engineering methodology:
 2. **First Usable Release Prioritization:** Stages 0 through 4 deliver the foundational, fully functional local study loop (Ingest $\rightarrow$ Retrieve $\rightarrow$ Tutor with Citations $\rightarrow$ Exam & Grade). Stages 5 through 7 enrich the cognitive modeling, adaptation, and system hardening.
 3. **Realistic Verification Time:** Hour estimates explicitly include debugging on Windows, edge-case testing, citation auditing, and learning curves.
 4. **No Premature Optimization:** Architectural modularity is established early, but complex features (e.g., cross-encoders, multimodal vision, external research) are gated behind stable core baselines.
-5. **Explicit Git Commit Checkpoints:** Work for each stage is reviewed and verified in the local working tree before being committed as a permanent baseline. Stage 0 documentation was approved and committed as baseline commit `1827f1a`; Stage 1 ingestion engine is approved and committed as baseline commit `84db803`; Stage 2 hybrid retrieval is currently implemented and under review.
+5. **Explicit Git Commit Checkpoints:** Work for each stage is reviewed and verified in the local working tree before being committed as a permanent baseline. Stage 0 documentation was approved and committed as baseline commit `1827f1a`; Stage 1 ingestion engine is approved and committed as baseline commit `84db803`; Stage 2 hybrid retrieval is committed as baseline commit `7026c4c`; Stage 3 AI tutor is currently implemented and under review.
 
 ---
 
@@ -82,6 +82,7 @@ StudyOS follows a disciplined, stage-gated engineering methodology:
 ---
 
 ### Stage 2: Hybrid Retrieval & Evidence Grounding Engine
+- **Status:** Complete & Approved (Committed at `7026c4c`).
 - **Scope:** Implement local vector embeddings using ChromaDB (persistent local directory) and keyword search using SQLite FTS5 (BM25). Build the hybrid retrieval service using Reciprocal Rank Fusion (RRF). Enforce document-level filtering (`course_id`, `document_id` selection). Implement pre-flight health diagnostics for local Ollama service.
 - **Explicit Non-Goals:** Full conversational chatbot, exam generation, Streamlit UI.
 - **Expected Deliverables:**
@@ -109,24 +110,28 @@ StudyOS follows a disciplined, stage-gated engineering methodology:
 ---
 
 ### Stage 3: AI Tutor & Grounded Interactive Answering
-- **Scope:** Build the local model inference wrapper (`studyos.inference`) connecting to Ollama (`qwen2.5:7b` / `llama3:8b`) with pre-flight connectivity checks. Implement the evidence-grounded tutoring service (`studyos.tutoring`). Build prompt templates that enclose untrusted text in `<evidence_context>` delimiters, assign temporary evidence markers (`[E1]`, `[E2]`), and resolve validated markers to trusted database metadata. Build initial Streamlit UI for course management, document selection, and tutor chat.
-- **Explicit Non-Goals:** Exam generation, grading rubrics, automated learner modeling.
+- **Status:** Implementation in review (144 automated tests passing).
+- **Scope:** Build the local model inference wrapper (`studyos.inference`) connecting to Ollama (`qwen2.5:7b`) with pre-flight connectivity checks and local loopback validation. Implement the evidence-grounded tutoring service (`studyos.tutoring`). Build prompt templates that enclose untrusted text in `<evidence_context>` delimiters, assign temporary evidence markers (`[E1]`, `[E2]`), and resolve validated markers to trusted database metadata. Implement operational CLI (`scripts/ask_studyos.py`) with honest degraded-mode reporting and abstention.
+- **Explicit Non-Goals:** Exam generation, grading rubrics, automated learner modeling, Streamlit UI (deferred to UI phase).
 - **Expected Deliverables:**
-  - `studyos.inference.ollama`: Ollama API client with pre-flight health checks, streaming, and error handling.
+  - `studyos.inference.ollama`: Ollama API client with pre-flight health checks, typed models, timeout handling, and local loopback validation.
+  - `studyos.inference.fake`: Deterministic fake chat provider for offline test suites.
   - `studyos.tutoring.tutor`: RAG tutoring orchestrator with untrusted content isolation, evidence ID assignment, and resolution.
-  - `studyos.ui.pages.tutor`: Streamlit interactive chat interface with collapsible citation viewer.
-  - `tests/integration/test_tutor_grounding.py`: Automated tests asserting refusal on out-of-domain queries and rejection of invalid evidence markers.
-- **Prerequisites:** Stage 2 complete; Ollama running with 7B/8B model.
+  - `studyos.tutoring.citations`: Extraction and strict set-membership validation of citation markers against active retrieval results.
+  - `scripts/ask_studyos.py`: Operational command-line entrypoint for grounded answering.
+  - `tests/integration/test_tutor_grounding.py`: Automated tests asserting refusal on out-of-domain queries, course isolation, and rejection of invalid evidence markers.
+- **Prerequisites:** Stage 2 complete; Ollama running with 7B model or offline fake provider.
 - **Risks:**
-  - Model hallucinating citations not present in retrieved context.
+  - Model hallucinating citations not present in retrieved context (mitigated by strict set-membership validation).
   - High generation latency if VRAM threshold is breached.
 - **Verification Commands & Procedures:**
-  - Grounding test: `pytest tests/integration/test_tutor_grounding.py -v`.
-  - UI interactive test: `streamlit run app.py` $\rightarrow$ select 2 documents, ask technical questions, inspect citation drawers.
+  - Run full test suite: `pytest -v`.
+  - Grounding integration test: `pytest tests/integration/test_tutor_grounding.py -v`.
+  - CLI tutor test: `python scripts/ask_studyos.py --query "Explain Dijkstra algorithm" --course "CS101" --fake-chat --fake-embeddings`.
 - **Acceptance Criteria:**
   - Tutor answers reference valid application evidence markers (`[E1]`, `[E2]`) that resolve to verified source chunks from the selected document set; any unmapped or hallucinated marker is rejected.
-  - When asked about a concept not present in selected slides, tutor explicitly outputs the standard refusal message.
-  - Time to first token $\le 2.5$ seconds on RTX 5060; peak VRAM $\le 6.5$ GB.
+  - When asked about a concept not present in selected materials or when retrieval returns 0 chunks, tutor explicitly outputs the standard refusal message.
+  - 100% offline test suite execution with zero cloud calls or model downloads.
 - **Estimated Focused Hours:** 16–24 hours (Uncertainty: $\pm 25\%$).
 - **Dependencies:** Stage 2.
 
