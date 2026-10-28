@@ -6,9 +6,9 @@ StudyOS is an intelligent personal study environment designed for computer scien
 
 ---
 
-## Current Status: Stage 6 — Implementation in review (Advanced Adaptive Learning, Knowledge Graph & External Research)
+## Current Status: Stage 7 — Implementation in review (Production Hardening, Security, Reproducibility & Evaluation)
 
-StudyOS is developed under a disciplined, incremental engineering roadmap. Stage 0 (Architecture & Specification), Stage 1 (Document Ingestion Engine), Stage 2 (Hybrid Retrieval & Evidence Grounding Engine), Stage 3 (AI Tutor & Grounded Interactive Answering), Stage 4 (Exam Generation, Submission & Automated Grading Engine), and Stage 5 (Learner Model, Mastery Tracking & Personalized Revision) are complete and committed to the baseline. Stage 6 (Advanced Adaptive Learning, Knowledge Graph & External Research) is implemented and verified with 277 automated tests passing, currently undergoing review.
+StudyOS is developed under a disciplined, incremental engineering roadmap. Stages 0 through 6 are complete, verified, and committed to Git history. Stage 7 (Production Hardening, Security, Reproducibility, CI & Deterministic Evaluation) is implemented and verified with 287 automated tests passing, currently undergoing review.
 
 - [x] **Stage 0: Architecture & Specification** *(Approved & Baseline Committed at `1827f1a`)*
 - [x] **Stage 1: Document Ingestion, Parsing & Normalization Engine** *(Approved & Baseline Committed at `84db803`)*
@@ -16,8 +16,8 @@ StudyOS is developed under a disciplined, incremental engineering roadmap. Stage
 - [x] **Stage 3: AI Tutor & Grounded Interactive Answering** *(Approved & Baseline Committed at `3d9e26e`)*
 - [x] **Stage 4: Exam Generation, Submission & Automated Grading Engine** *(Approved & Baseline Committed at `7351c60`)*
 - [x] **Stage 5: Learner Model, Mastery Tracking & Personalized Revision** *(Approved & Baseline Committed at `73d49bf`)*
-- [ ] **Stage 6: Advanced Adaptive Learning, Knowledge Graph & External Research** *(Implementation in review)*
-- [ ] **Stage 7: Comprehensive Evaluation, Security & Portfolio Polish**
+- [x] **Stage 6: Advanced Adaptive Learning, Knowledge Graph & External Research** *(Approved & Baseline Committed at `bac6d78`)*
+- [ ] **Stage 7: Production Hardening, Security, Reproducibility & Evaluation** *(Implementation in review)*
 
 *Note: In accordance with Stage 6 scope, StudyOS provides direct concept discovery from raw chunks, course-scoped prerequisite DAGs with deterministic cycle prevention, forgetting-aware review scheduling (local-fsrs-v1), a transparent adaptive study planner, and explicit opt-in external research with SSRF safety and citation validation, without cloud telemetry or data leakage.*
 
@@ -534,21 +534,86 @@ python scripts/learner.py research --query "Dijkstra algorithm priority queue" -
 
 ---
 
-### 10. Automated Testing Without Ollama
+### 10. Automated Testing & Continuous Integration Without Ollama
 The entire test suite is 100% deterministic and runs completely offline without requiring a running Ollama daemon or downloading models:
 - **Fake Embeddings**: Unit and integration tests inject `FakeEmbeddingProvider`, generating deterministic 384-dimensional vectors from SHA-256 hashes.
 - **Fake Chat Provider**: Tutor, exam, concept discovery, and research tests inject `FakeChatProvider`, supporting queued responses, citation verification, and error simulation.
-- **Mock HTTP Layer**: Ollama API and external network tests simulate responses, timeouts, connection errors, SSRF attempts, and malformed JSON using mocked HTTP transports.
+- **Mock HTTP Layer**: Ollama API and external network tests simulate responses, timeouts, connection errors, SSRF attempts, socket connection pinning, and malformed JSON using mocked HTTP transports.
 - **Temporary Storage**: All tests run against ephemeral SQLite databases and temporary directories for ChromaDB.
+- **Continuous Integration**: GitHub Actions workflow (`.github/workflows/ci.yml`) runs across Windows and Linux matrix configurations, checking lockfile consistency (`uv lock --check`), dependency sync (`uv sync --frozen`), compilation, evaluation benchmark, and the complete pytest suite.
 
-Run the complete test suite (277 passing tests):
+Run the complete test suite (287 passing tests):
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -v
 ```
 
 ---
 
-### 11. Current Known Limitations
+### 11. Deterministic Evaluation Benchmark Harness
+StudyOS includes a dedicated, reproducible quality and security benchmark (`scripts/evaluate.py`) running against labeled academic fixtures:
+
+```powershell
+# Run the complete deterministic evaluation benchmark
+.\.venv\Scripts\python.exe scripts/evaluate.py
+
+# Output structured JSON metrics for automated CI reporting
+.\.venv\Scripts\python.exe scripts/evaluate.py --json
+
+# Optional: include live Ollama model availability check
+.\.venv\Scripts\python.exe scripts/evaluate.py --live-model
+```
+
+#### Measured Benchmark Dimensions:
+1. **Retrieval Quality (RRF $k=60$):** Measures Top-1 accuracy, Recall@3, Recall@5, and Mean Reciprocal Rank (MRR) against ground-truth target chunks.
+2. **Citation Integrity & Hallucination Defense:** Confirms 100% resolution of authentic citations and 100% rejection/sanitization of hallucinated markers (`[E99]`).
+3. **Tutor Grounding & Immediate Abstention:** Verifies that unanswerable or unindexed queries trigger immediate refusal (`unsupported=True`) without hallucinating content.
+4. **Assessment Security & Answer-Key Isolation:** Evaluates public exam presentations (`PublicExam`) to guarantee zero leakage of answer keys, rubrics, or explanations prior to grading.
+5. **Learner Mastery & Forgetting-Aware Scheduling:** Validates Laplace-smoothed posterior mastery estimates ($M = (k+1)/(n+2)$) and power-law memory decay retrievability under FSRS (`local-fsrs-v1`).
+6. **Concept Graph Constraints:** Enforces database-level rejection of prerequisite cycles and cross-course relationship edges.
+
+---
+
+### 12. Local Data Management, Backup & Restore
+All user data resides in `~/.studyos` (`studyos.db` for relational entities and `chroma/` for persistent dense vector indexes).
+
+#### A. Hot Online Backup (Live Database)
+Because StudyOS uses SQLite WAL mode, you can safely take a non-blocking, transactionally consistent live backup at any time:
+```powershell
+# Python hot online backup using SQLite's native backup API
+.\.venv\Scripts\python.exe -c "
+import sqlite3
+from pathlib import Path
+src = sqlite3.connect(Path.home() / '.studyos' / 'studyos.db')
+dst = sqlite3.connect(Path.home() / '.studyos' / 'backup_studyos.db')
+src.backup(dst)
+dst.close()
+src.close()
+print('Hot backup completed successfully.')
+"
+```
+
+#### B. Cold File Backup & Restore
+To copy the database file directly, first checkpoint the write-ahead log:
+```powershell
+# Checkpoint WAL log into the main database file
+.\.venv\Scripts\python.exe -c "
+import sqlite3
+from pathlib import Path
+conn = sqlite3.connect(Path.home() / '.studyos' / 'studyos.db')
+conn.execute('PRAGMA wal_checkpoint(TRUNCATE);')
+conn.close()
+"
+
+# Copy the database file
+Copy-Item "$HOME\.studyos\studyos.db" "$HOME\.studyos\studyos_backup.db"
+```
+
+#### C. Database Migration Integrity
+All migrations (0001 through 0007) execute inside atomic transaction blocks (`BEGIN TRANSACTION; ... COMMIT;`). If any migration statement fails, the transaction is immediately rolled back, leaving zero partial tables and zero schema corruption.
+
+---
+
+### 13. Current Known Limitations
 - **Citation Provenance vs. Claim Entailment**: The application strictly validates citation reference provenance (guaranteeing that every citation resolves to a real SQLite chunk retrieved for that query and rejecting invented markers). However, syntactic citation validation does not mathematically prove logical entailment of the generated claim. Formal natural language inference (NLI) evaluation is reserved for Stage 7.
 - **Assessment Structure vs. Pedagogical Validity**: The assessment engine deterministically validates question structure, schema, distractor uniqueness, single-correct-answer constraints, and evidence marker provenance. However, automated generation cannot guarantee pedagogical perfection or replace human instructor review.
 - **Local FSRS Model vs. Neurological Memory**: The review scheduling algorithm implements a documented, bounded DSR policy (`local-fsrs-v1`) calculating power-law retrievability $R(t,S)$. While mathematically principled, it is an empirical scheduling heuristic and does not prove neurological retention across all individuals.

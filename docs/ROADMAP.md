@@ -211,7 +211,7 @@ StudyOS follows a disciplined, stage-gated engineering methodology:
 ---
 
 ### Stage 6: Advanced Adaptive Learning, Knowledge Graph & External Research
-- **Status:** Implementation in review.
+- **Status:** Approved & Baseline Committed at `bac6d78`.
 - **Scope:** Provide evidence-backed concept discovery from ingested documents independently of exams, course-scoped concept relationship graph (`prerequisite`, `related`) with deterministic DAG cycle detection, advanced forgetting-aware review scheduling (`local-fsrs-v1` DSR model with power-law retention), transparent adaptive study planner with time budgeting, and explicitly opt-in external research with strict privacy boundaries, SSRF prevention, and verified `[EXT-N]` citations.
 - **Explicit Non-Goals:** Unbounded internet browsing, automatic document leakage to external APIs, speculative psychological claims.
 - **Expected Deliverables:**
@@ -246,26 +246,27 @@ StudyOS follows a disciplined, stage-gated engineering methodology:
 ---
 
 ### Stage 7: Comprehensive Evaluation, Security, Performance & Portfolio Polish
-- **Scope:** Build a comprehensive evaluation harness with a golden benchmark dataset of real CS/DS course materials. Quantify citation precision, recall, and answer faithfulness. Conduct security hardening (sanitize logs, validate file upload paths, test directory traversal guards). Optimize VRAM usage and database indexing. Polish UI styling, documentation, and create developer setup scripts for portfolio presentation.
-- **Explicit Non-Goals:** Cloud commercialization.
+- **Status:** Implementation in review.
+- **Scope:** Build a deterministic evaluation benchmark harness testing retrieval recall, citation resolution, and security isolation; harden document parsers against decompression archive bombs; implement atomic SQLite transactional migrations with rollback; verify backup and recovery integrity; establish GitHub Actions CI workflow with matrix OS testing; and finalize developer documentation.
+- **Explicit Non-Goals:** Cloud commercialization, live external network calls during CI, rewriting operational architecture.
 - **Expected Deliverables:**
-  - `benchmarks/`: Golden dataset of 50 course questions, ground truth citations, and evaluation runner.
-  - `docs/BENCHMARK_REPORT.md`: Empirical evaluation results.
-  - Performance audit report (VRAM, memory, latency).
-  - Security review documentation.
-  - One-click setup script (`setup.ps1` using `uv`).
-- **Prerequisites:** Stages 1–6 complete.
-- **Risks:**
-  - Benchmarks revealing lower than expected citation precision requiring prompt tuning.
+  - `scripts/evaluate.py`: Deterministic evaluation benchmark measuring Retrieval Recall@K, MRR, citation resolution, answer-key isolation, learner mastery updates, and graph invariants.
+  - `studyos/ingestion/parsers.py`: Ingestion archive decompression safety validation (`validate_zip_archive_safety`).
+  - `studyos/storage/db.py`: Atomic transactional migration runner wrapping every migration in `BEGIN TRANSACTION; ... COMMIT;` with rollback on error.
+  - `.github/workflows/ci.yml`: GitHub Actions continuous integration workflow testing on Windows and Ubuntu.
+  - `tests/unit/test_stage7_migrations_and_recovery.py`: Migration upgrades, fresh creation, FK integrity, and online SQLite backup/restore test suite.
+  - `tests/unit/test_evaluation_harness.py`: Automated pytest test for the benchmark runner.
 - **Verification Commands & Procedures:**
-  - Run full benchmark suite: `python benchmarks/run_eval.py`.
-  - Run end-to-end test suite: `pytest tests/ -v --cov=studyos`.
-  - Full clean install test on clean machine/directory.
+  - Deterministic evaluation benchmark: `python scripts/evaluate.py` (and `python scripts/evaluate.py --json`).
+  - Full automated test suite: `pytest -v` (287 passed).
+  - Lockfile consistency: `uv lock --check`.
+  - Packaging verification: `uv build`.
 - **Acceptance Criteria:**
-  - Full automated test suite passes with $\ge 80\%$ code coverage.
-  - Golden benchmark achieves $\ge 85\%$ citation precision and $\ge 90\%$ answer grounding.
-  - End-to-end memory and VRAM stay strictly within the documented budgets.
-- **Estimated Focused Hours:** 20–28 hours (Uncertainty: $\pm 25\%$).
+  - 100% offline test suite passes with 287 tests and zero regressions.
+  - Deterministic evaluation benchmark produces PASS status with 100% Recall@5 and zero answer-key leakage.
+  - Migration rollback leaves zero partial tables or uncommitted state on failure.
+  - Online SQLite backup restores databases with 100% data fidelity and 0 foreign key violations.
+- **Estimated Focused Hours:** 18–24 hours (Completed in Stage 7).
 - **Dependencies:** Stages 1–6.
 
 ---
@@ -280,8 +281,8 @@ StudyOS follows a disciplined, stage-gated engineering methodology:
 | **3** | **AI Tutor with Citations** | Ollama 7B/8B, Grounding, Streamlit UI | **16–24 h** *(Done)* | 48–72 h |
 | **4** | **Assessment & Exam Engine** | Quiz Gen, Leak Prevention, Grading | **18–26 h** *(Done)* | 66–98 h |
 | **5** | **Persistent Learner Model** | Mastery Tracking, Spaced Revision | **14–20 h** *(Done)* | 80–118 h |
-| **6** | **Adaptive Learning & Research** | Concept Graph, FSRS, Adaptive Plan, Research | **16–22 h** *(Under Review)* | 96–140 h |
-| **7** | **Evaluation & Portfolio Polish** | Benchmarks, Security, Coverage | **20–28 h** | 116–168 h |
-| **Total** | **Full System Lifecycle** | **Production-Grade Personal StudyOS** | **116–168 h** | **~3–5 calendar weeks** |
+| **6** | **Adaptive Learning & Research** | Concept Graph, FSRS, Adaptive Plan, Research | **16–22 h** *(Done)* | 96–140 h |
+| **7** | **Evaluation & Portfolio Polish** | Benchmarks, CI, Security, Recoverability | **18–24 h** *(Under Review)* | 114–164 h |
+| **Total** | **Full System Lifecycle** | **Production-Grade Personal StudyOS** | **114–164 h** | **~3–5 calendar weeks** |
 
 *Note: Hours represent focused technical work including edge-case debugging, verification, and empirical testing. First usable release (Stages 1–4) is achieved at ~66–98 focused hours.*

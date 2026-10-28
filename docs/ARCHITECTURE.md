@@ -726,3 +726,43 @@ On a laptop GPU, VRAM contention can trigger catastrophic performance drops (spi
 - **Sequential Model Execution:** Never run embedding generation and long-context LLM generation simultaneously on GPU.
 - **Bounded Ingestion Batches:** Ingest documents page-by-page; never load a 500-page PDF into a single in-memory string.
 - **Context Window Clamping:** Enforce a hard maximum of 4,096 tokens per prompt in Ollama to bound KV-cache VRAM consumption.
+
+---
+
+## 9. Production Hardening, Security, Evaluation & Recoverability (Stage 7)
+
+### 9.1 Ingestion Defense-in-Depth & Zip Bomb Protection
+To prevent denial-of-service through resource exhaustion, OpenXML archive parsers (`DOCXParser` and `PPTXParser`) enforce structural archive safety validation prior to decompression:
+- **Zip Signature Verification:** Files must pass `zipfile.is_zipfile` checks; malformed archive headers are rejected as `CorruptFileError`.
+- **Uncompressed Byte Ceiling:** Total uncompressed size across all archive members is capped at a safe ceiling (`max_file_size_bytes * 5`, default 500 MiB).
+- **Entry Count Limits:** Archives containing more than 10,000 files are rejected.
+- **Compression Ratio Bounds:** Archives exhibiting compression ratios exceeding 100:1 with more than 20 MiB of uncompressed content are blocked as potential decompression bombs.
+
+### 9.2 Atomic Database Migration Runner & Rollback Safety
+SQLite migrations (0001 through 0007) execute inside explicit transaction blocks (`BEGIN TRANSACTION; ... COMMIT;`):
+- If any statement in a migration script encounters an error, the migration transaction is immediately rolled back via `conn.rollback()`.
+- The version is not recorded in `schema_migrations`, preventing partial table definitions or corrupted database schemas.
+- Reopening a migrated database is idempotent and performs a clean no-op without re-executing migrations or altering schema state.
+
+### 9.3 Data Integrity & Backup / Restore Protocols
+StudyOS implements robust backup and restore procedures ensuring 100% preservation across courses, documents, chunks, assessment attempts, citation snapshots, learner profiles, concept graphs, and external research records:
+- **Hot Online Backup:** Utilizes SQLite's native online backup API (`sqlite3.Connection.backup(dst)`) to take non-blocking, transactionally consistent live snapshots while WAL mode is active.
+- **Cold File Backup:** Ensures WAL journal files are fully checkpointed (`PRAGMA wal_checkpoint(TRUNCATE)`) before file copying.
+- **Integrity Validation:** Every restored database verifies `PRAGMA integrity_check` = `ok` and `PRAGMA foreign_key_check` = `0 violations`.
+
+### 9.4 Deterministic Evaluation Benchmark Harness
+The evaluation harness (`scripts/evaluate.py`) provides empirical verification of system quality across six core dimensions:
+1. **Retrieval Quality:** Measures Top-1 accuracy, Recall@3, Recall@5, and Mean Reciprocal Rank (MRR) against labeled academic fixtures using Reciprocal Rank Fusion (RRF $k=60$).
+2. **Citation Resolution:** Verifies that model-generated markers (`[E1]`, `[E2]`) resolve to authentic SQLite source chunks while hallucinated (`[E99]`) markers are rejected.
+3. **Tutor Abstention:** Confirms that queries lacking relevant evidence trigger immediate abstention (`unsupported=True`) without hallucinating claims.
+4. **Answer-Key Confidentiality:** Validates that student-facing assessment models (`PublicExam`, `PublicQuestion`) strictly leak 0% of correct answers, rubrics, or explanations.
+5. **Learner Mastery & Spaced Repetition:** Verifies Laplace-smoothed mastery estimates ($M=(k+1)/(n+2)$) and power-law memory retrievability decay under FSRS (`local-fsrs-v1`).
+6. **Concept Graph Constraints:** Enforces database-level rejection of prerequisite cycles and cross-course relationship boundaries.
+
+### 9.5 Practical Continuous Integration
+A lightweight GitHub Actions matrix workflow (`.github/workflows/ci.yml`) runs on both Windows and Linux:
+- Enforces lockfile consistency (`uv lock --check`).
+- Installs dependencies from frozen lockfiles (`uv sync --frozen`).
+- Performs AST compilation and syntax checks across all modules (`python -m compileall`).
+- Runs the deterministic evaluation harness (`python scripts/evaluate.py`).
+- Executes the complete 287-test offline test suite (`pytest -v`).

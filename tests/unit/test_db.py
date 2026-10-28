@@ -37,6 +37,43 @@ class TestDatabaseInitAndMigrations:
         # Re-running migrate() should be safe and idempotent
         mem_db.migrate()
 
+    def test_failing_migration_rolls_back_atomically(self, tmp_path, monkeypatch):
+        # Create a temporary migrations directory with a valid migration followed by a failing one
+        fake_mig_dir = tmp_path / "fake_migrations"
+        fake_mig_dir.mkdir()
+
+        # Copy existing migrations 0001 through 0007
+        real_mig_dir = Path(__file__).parents[2] / "studyos" / "storage" / "migrations"
+        for mf in sorted(real_mig_dir.glob("*.sql")):
+            (fake_mig_dir / mf.name).write_text(mf.read_text(encoding="utf-8"), encoding="utf-8")
+
+        # Add a broken migration 0008 that creates a table and then fails with invalid SQL
+        broken_mig = fake_mig_dir / "0008_broken_migration.sql"
+        broken_mig.write_text(
+            "CREATE TABLE temporary_test_tab (id INT PRIMARY KEY);\n"
+            "INSERT INTO non_existent_table_xyz VALUES (1);\n",
+            encoding="utf-8",
+        )
+
+        db = Database(tmp_path / "rollback_test.db")
+
+        # Monkeypatch migrations directory
+        monkeypatch.setattr(
+            "studyos.storage.db.Path.__truediv__",
+            lambda self, other: fake_mig_dir if other == "migrations" else Path(self).joinpath(other),
+        )
+
+        with pytest.raises(RuntimeError, match="Migration 0008 .* failed and was rolled back"):
+            db.migrate()
+
+        # Verify that temporary_test_tab does NOT exist and version 8 was NOT recorded
+        with db.get_connection() as conn:
+            tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table';").fetchall()]
+            assert "temporary_test_tab" not in tables
+            versions = [r[0] for r in conn.execute("SELECT version FROM schema_migrations;").fetchall()]
+            assert 8 not in versions
+            assert 7 in versions
+
     def test_file_database_wal_mode_and_persistence(self, tmp_path):
         db_file = tmp_path / "persistent.db"
         db = Database(db_file)

@@ -1,0 +1,49 @@
+name: StudyOS CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test & Verify (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.12"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Verify dependency lockfile consistency
+        run: uv lock --check
+
+      - name: Install dependencies (frozen)
+        run: uv sync --frozen
+
+      - name: Validate Python syntax and compilation
+        run: uv run python -m compileall -q studyos scripts tests
+
+      - name: Run deterministic evaluation benchmark
+        run: uv run python scripts/evaluate.py
+
+      - name: Run complete offline test suite
+        run: uv run pytest -v
+

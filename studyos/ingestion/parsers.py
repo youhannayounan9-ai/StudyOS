@@ -7,6 +7,7 @@ import hashlib
 from pathlib import Path
 import re
 from typing import Any
+import zipfile
 
 from studyos.ingestion.models import (
     CorruptFileError,
@@ -141,12 +142,67 @@ class PDFParser(DocumentParser):
         )
 
 
+def validate_zip_archive_safety(
+    file_path: Path,
+    actual_filename: str,
+    max_uncompressed_bytes: int = 200 * 1024 * 1024,
+    max_file_count: int = 10000,
+    max_compression_ratio: float = 100.0,
+) -> None:
+    """Validate that a zip-based archive (DOCX/PPTX) is structurally safe before decompression.
+
+    Defends against decompression bombs (zip bombs) and corrupt archive headers.
+    """
+    if not zipfile.is_zipfile(file_path):
+        raise CorruptFileError(f"File '{actual_filename}' is not a valid zip archive or has a corrupt header.")
+
+    try:
+        with zipfile.ZipFile(file_path, "r") as zf:
+            infolist = zf.infolist()
+            if len(infolist) > max_file_count:
+                raise CorruptFileError(
+                    f"Archive '{actual_filename}' contains {len(infolist)} entries, "
+                    f"exceeding safety threshold of {max_file_count}."
+                )
+
+            total_uncompressed = 0
+            total_compressed = 0
+            for info in infolist:
+                total_uncompressed += info.file_size
+                total_compressed += info.compress_size
+                if total_uncompressed > max_uncompressed_bytes:
+                    raise CorruptFileError(
+                        f"Archive '{actual_filename}' uncompressed size exceeds safety ceiling of "
+                        f"{max_uncompressed_bytes // (1024 * 1024)} MiB (decompression bomb protection)."
+                    )
+
+            if total_compressed > 0:
+                ratio = total_uncompressed / total_compressed
+                if ratio > max_compression_ratio and total_uncompressed > 20 * 1024 * 1024:
+                    raise CorruptFileError(
+                        f"Archive '{actual_filename}' exhibits suspicious compression ratio of "
+                        f"{ratio:.1f}:1 exceeding {max_compression_ratio}:1 (decompression bomb protection)."
+                    )
+    except zipfile.BadZipFile as e:
+        raise CorruptFileError(f"Corrupt zip archive '{actual_filename}': {e}") from e
+    except Exception as e:
+        if isinstance(e, CorruptFileError):
+            raise
+        raise CorruptFileError(f"Failed to inspect zip archive '{actual_filename}': {e}") from e
+
+
 class DOCXParser(DocumentParser):
     """Parser for Microsoft Word (.docx) documents using python-docx."""
 
     def parse(self, file_path: Path, filename: str | None = None) -> ParsedDocument:
         file_size, file_hash = self.validate_file(file_path)
         actual_filename = filename or file_path.name
+
+        validate_zip_archive_safety(
+            file_path,
+            actual_filename,
+            max_uncompressed_bytes=self.max_file_size_bytes * 5,
+        )
 
         try:
             import docx
@@ -229,6 +285,12 @@ class PPTXParser(DocumentParser):
     def parse(self, file_path: Path, filename: str | None = None) -> ParsedDocument:
         file_size, file_hash = self.validate_file(file_path)
         actual_filename = filename or file_path.name
+
+        validate_zip_archive_safety(
+            file_path,
+            actual_filename,
+            max_uncompressed_bytes=self.max_file_size_bytes * 5,
+        )
 
         try:
             import pptx

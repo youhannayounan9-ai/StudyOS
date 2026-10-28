@@ -152,6 +152,17 @@ class TestDOCXParser:
         with pytest.raises(CorruptFileError):
             parser.parse(corrupt_docx)
 
+    def test_docx_decompression_bomb_rejected(self, tmp_path):
+        import zipfile
+        bomb_docx = tmp_path / "bomb.docx"
+        with zipfile.ZipFile(bomb_docx, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            # Write a single heavily compressed stream exceeding the test parser ceiling
+            zf.writestr("word/document.xml", b"A" * (2 * 1024 * 1024))
+        # Set a low limit for the test
+        parser = DOCXParser(max_file_size_bytes=100 * 1024)
+        with pytest.raises(CorruptFileError, match="decompression bomb"):
+            parser.parse(bomb_docx)
+
 
 class TestPPTXParser:
     def test_parse_valid_synthetic_pptx(self, synthetic_fixtures):
@@ -217,6 +228,22 @@ class TestPPTXParser:
         parser = PPTXParser()
         with pytest.raises(EmptyFileError):
             parser.parse(empty_pptx)
+
+    def test_pptx_corrupt_file_rejected(self, tmp_path):
+        corrupt_pptx = tmp_path / "corrupt.pptx"
+        corrupt_pptx.write_bytes(b"PK\x03\x04corrupt pptx content")
+        parser = PPTXParser()
+        with pytest.raises(CorruptFileError):
+            parser.parse(corrupt_pptx)
+
+    def test_pptx_decompression_bomb_rejected(self, tmp_path):
+        import zipfile
+        bomb_pptx = tmp_path / "bomb.pptx"
+        with zipfile.ZipFile(bomb_pptx, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("ppt/slides/slide1.xml", b"B" * (2 * 1024 * 1024))
+        parser = PPTXParser(max_file_size_bytes=100 * 1024)
+        with pytest.raises(CorruptFileError, match="decompression bomb"):
+            parser.parse(bomb_pptx)
 
 
 class TestTXTParser:

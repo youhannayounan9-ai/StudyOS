@@ -83,7 +83,12 @@ class Database:
             self._mem_conn = None
 
     def migrate(self) -> None:
-        """Apply all pending SQL migrations in deterministic numerical order."""
+        """Apply all pending SQL migrations in deterministic numerical order.
+
+        Each migration is executed inside an explicit transaction block. If an error occurs
+        during migration execution, the transaction is immediately rolled back, ensuring
+        zero partially applied schemas or database corruption.
+        """
         migrations_dir = Path(__file__).parent / "migrations"
         if not migrations_dir.is_dir():
             return
@@ -109,10 +114,22 @@ class Database:
 
                 if version not in applied_versions:
                     sql_script = mf.read_text(encoding="utf-8")
-                    conn.executescript(sql_script)
-                    conn.execute(
-                        "INSERT INTO schema_migrations (version) VALUES (?);", (version,)
+                    tx_script = (
+                        f"BEGIN TRANSACTION;\n"
+                        f"{sql_script}\n"
+                        f"INSERT INTO schema_migrations (version) VALUES ({version});\n"
+                        f"COMMIT;\n"
                     )
+                    try:
+                        conn.executescript(tx_script)
+                    except Exception as e:
+                        try:
+                            conn.rollback()
+                        except Exception:
+                            pass
+                        raise RuntimeError(
+                            f"Migration {version:04d} ({mf.name}) failed and was rolled back: {e}"
+                        ) from e
 
     # -----------------------------------------------------------------------
     # Course Operations
