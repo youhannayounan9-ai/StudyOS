@@ -221,6 +221,86 @@ def test_pending_manual_review_does_not_penalize_mastery(test_db):
     assert summary_after.accuracy_rate == 100.0
 
 
+def test_partial_credit_and_fsrs_review_scheduling(test_db):
+    """Partial credit maps to FSRS rating (HARD) and sets up local-fsrs-v1 review task metrics."""
+    assess_repo = AssessmentRepository(test_db)
+    service = LearnerService(db=test_db, assessment_repo=assess_repo)
+
+    crs = test_db.create_course("Databases", "CS201")
+    exam = assess_repo.save_exam(
+        Exam(
+            id="ex_db",
+            course_id=crs.id,
+            title="Transactions & ACID",
+            difficulty=Difficulty.MEDIUM,
+            question_count=1,
+            questions=[
+                ExamQuestion(
+                    id="q_acid",
+                    exam_id="ex_db",
+                    question_index=1,
+                    question_type=QuestionType.SHORT_ANSWER,
+                    difficulty=Difficulty.MEDIUM,
+                    question_text="Explain ACID properties.",
+                    correct_answer="Atomicity, Consistency, Isolation, Durability",
+                    explanation="ACID guarantees reliable transactions.",
+                ),
+            ],
+        )
+    )
+
+    attempt = assess_repo.create_attempt("ex_db")
+    # Partial credit: 2 out of 3 points (ratio 0.667 -> maps to ReviewRating.HARD)
+    q_results = [
+        QuestionResult(
+            question_id="q_acid",
+            question_index=1,
+            question_text="Explain ACID properties.",
+            question_type=QuestionType.SHORT_ANSWER,
+            submitted_answer="Atomicity and Isolation",
+            correct_answer="Atomicity, Consistency, Isolation, Durability",
+            is_correct=False,
+            status=GradingStatus.GRADED,
+            score=2.0,
+            max_score=3.0,
+            explanation="Partial credit awarded.",
+            feedback="Mentioned A and I, but missed C and D.",
+        ),
+    ]
+
+    assess_repo.save_attempt_results(
+        attempt_id=attempt.id,
+        results=q_results,
+        provisional_score=2.0,
+        max_score=3.0,
+    )
+    exam_result = assess_repo.get_attempt_result(attempt.id)
+    service.process_exam_attempt_results(attempt.id, exam_result)
+
+    # Inspect concept mastery
+    repo = service.repository
+    concepts = repo.list_concepts(course_id=crs.id)
+    assert len(concepts) == 1
+    cpt = concepts[0]
+
+    mastery = repo.get_concept_mastery("learner_default", cpt.id)
+    assert mastery is not None
+    assert mastery.scheduler_policy == "local-fsrs-v1"
+    # For initial HARD: stability is 1.2 days
+    assert mastery.stability == 1.2
+    assert mastery.difficulty == 6.0
+    assert mastery.interval_days == 1.2
+
+    # Inspect review task in queue
+    tasks = service.list_pending_reviews(course_id=crs.id)
+    assert len(tasks) == 1
+    task = tasks[0]
+    assert task.concept_id == cpt.id
+    assert task.scheduler_policy == "local-fsrs-v1"
+    assert task.scheduled_interval == 1.2
+
+
+
 def test_course_isolation_in_progress_summaries(test_db):
     assess_repo = AssessmentRepository(test_db)
     service = LearnerService(db=test_db, assessment_repo=assess_repo)

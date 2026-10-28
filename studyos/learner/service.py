@@ -11,23 +11,36 @@ from studyos.assessment.repository import AssessmentRepository
 from studyos.core.config import AppConfig, get_default_config
 from studyos.inference.protocol import ChatProvider
 from studyos.learner.concept_mapper import ConceptMapper
+from studyos.learner.discovery import ConceptDiscoveryService
 from studyos.learner.models import (
     Concept,
     ConceptMastery,
     ConceptProgressSummary,
+    ConceptRelationship,
+    ConceptReviewStatus,
     CourseProgressSummary,
+    DiscoveryResult,
     LearnerEvent,
     LearnerEventType,
     LearnerProfile,
     LearnerProgressSummary,
     MasteryCategory,
+    RelationshipProvenance,
+    RelationshipStatus,
+    RelationshipType,
     ReviewRating,
     ReviewStatus,
     ReviewTask,
     StudyRecommendation,
 )
+from studyos.learner.planner import AdaptivePlannerService, AdaptiveStudyPlan
 from studyos.learner.repository import LearnerRepository
-from studyos.learner.scheduler import compute_next_schedule, is_review_due, is_review_overdue
+from studyos.learner.scheduler import (
+    compute_next_schedule,
+    is_review_due,
+    is_review_overdue,
+    map_grade_to_rating,
+)
 from studyos.storage.db import Database
 
 logger = logging.getLogger(__name__)
@@ -202,27 +215,43 @@ class LearnerService:
                     course_id=exam_result.course_id,
                 )
 
-                # Update review schedule based on graded correctness
+                # Determine rating from score earned / possible if available, otherwise boolean
+                if qr.score is not None and qr.max_score > 0:
+                    rating = map_grade_to_rating(qr.score, qr.max_score)
+                else:
+                    rating = ReviewRating.GOOD if qr.is_correct else ReviewRating.AGAIN
+
+                # Update review schedule using concept's configured scheduler policy
                 sched = compute_next_schedule(
                     current_interval=mastery.interval_days,
                     current_ease=mastery.ease_factor,
                     repetition_count=mastery.repetition_count,
-                    rating_or_correctness=bool(qr.is_correct),
+                    rating_or_correctness=rating,
+                    policy=mastery.scheduler_policy,
+                    stability=mastery.stability,
+                    difficulty=mastery.difficulty,
                     now=now,
                 )
                 due_iso = sched.next_due_date.isoformat()
                 mastery.interval_days = sched.interval_days
                 mastery.ease_factor = sched.ease_factor
                 mastery.repetition_count = sched.repetition_count
+                mastery.stability = sched.stability
+                mastery.difficulty = sched.difficulty
+                mastery.retrievability = sched.estimated_retention
+                mastery.scheduler_policy = sched.scheduler_policy
                 mastery.next_review_due = due_iso
                 self.repository.upsert_concept_mastery(mastery)
 
-                # Ensure active review task is scheduled in the queue
+                # Ensure active review task is scheduled in the queue with policy and metrics
                 self.repository.create_or_update_review_task(
                     learner_id=learner_id,
                     concept_id=cpt.id,
                     course_id=exam_result.course_id,
                     due_date=due_iso,
+                    scheduler_policy=sched.scheduler_policy,
+                    scheduled_interval=sched.interval_days,
+                    estimated_retention=sched.estimated_retention,
                 )
 
     def process_manual_review_finalized(
@@ -273,17 +302,29 @@ class LearnerService:
                 concept_id=cpt.id,
                 course_id=course_id,
             )
-            # Update review schedule
+            if max_score > 0:
+                rating = map_grade_to_rating(awarded_score, max_score)
+            else:
+                rating = ReviewRating.GOOD if is_correct else ReviewRating.AGAIN
+
+            # Update review schedule using concept's configured scheduler policy
             sched = compute_next_schedule(
                 current_interval=mastery.interval_days,
                 current_ease=mastery.ease_factor,
                 repetition_count=mastery.repetition_count,
-                rating_or_correctness=is_correct,
+                rating_or_correctness=rating,
+                policy=mastery.scheduler_policy,
+                stability=mastery.stability,
+                difficulty=mastery.difficulty,
             )
             due_iso = sched.next_due_date.isoformat()
             mastery.interval_days = sched.interval_days
             mastery.ease_factor = sched.ease_factor
             mastery.repetition_count = sched.repetition_count
+            mastery.stability = sched.stability
+            mastery.difficulty = sched.difficulty
+            mastery.retrievability = sched.estimated_retention
+            mastery.scheduler_policy = sched.scheduler_policy
             mastery.next_review_due = due_iso
             self.repository.upsert_concept_mastery(mastery)
             self.repository.create_or_update_review_task(
@@ -291,6 +332,9 @@ class LearnerService:
                 concept_id=cpt.id,
                 course_id=course_id,
                 due_date=due_iso,
+                scheduler_policy=sched.scheduler_policy,
+                scheduled_interval=sched.interval_days,
+                estimated_retention=sched.estimated_retention,
             )
 
     # ---------------------------------------------------------------------------
@@ -689,6 +733,115 @@ class LearnerService:
         self,
         task_id: str,
         rating: ReviewRating,
+        policy: str | None = None,
     ) -> ReviewTask:
         """Record completed review rating and reschedule next review interval."""
-        return self.repository.complete_review_task(task_id=task_id, rating=rating)
+        return self.repository.complete_review_task(task_id=task_id, rating=rating, policy=policy)
+
+    # ---------------------------------------------------------------------------
+    # Stage 6: Direct Concept Discovery
+    # ---------------------------------------------------------------------------
+
+    def discover_concepts(
+        self,
+        course_id: str,
+        document_id: str | None = None,
+        max_chunks: int = 15,
+        auto_accept: bool = False,
+    ) -> DiscoveryResult:
+        """Discover concepts directly from ingested materials independently of exams."""
+        discovery_service = ConceptDiscoveryService(
+            db=self.db,
+            repository=self.repository,
+            chat_provider=self.chat_provider,
+        )
+        return discovery_service.discover_concepts(
+            course_id=course_id,
+            document_id=document_id,
+            max_chunks=max_chunks,
+            auto_accept=auto_accept,
+        )
+
+    # ---------------------------------------------------------------------------
+    # Stage 6: Concept Relationship Graph
+    # ---------------------------------------------------------------------------
+
+    def add_concept_relationship(
+        self,
+        course_id: str,
+        source_concept_id: str,
+        target_concept_id: str,
+        relationship_type: RelationshipType | str,
+        provenance: RelationshipProvenance | str = RelationshipProvenance.MANUAL,
+        source_evidence: str | None = None,
+        confidence: float = 1.0,
+        review_status: RelationshipStatus | str = RelationshipStatus.ACCEPTED,
+    ) -> ConceptRelationship:
+        """Add or update a directed relationship between two concepts in the same course."""
+        return self.repository.add_concept_relationship(
+            course_id=course_id,
+            source_concept_id=source_concept_id,
+            target_concept_id=target_concept_id,
+            relationship_type=relationship_type,
+            provenance=provenance,
+            source_evidence=source_evidence,
+            confidence=confidence,
+            review_status=review_status,
+        )
+
+    def update_relationship_status(
+        self,
+        relationship_id: str,
+        status: RelationshipStatus | str,
+    ) -> ConceptRelationship:
+        """Accept or reject a proposed relationship."""
+        return self.repository.update_relationship_status(relationship_id=relationship_id, status=status)
+
+    def delete_concept_relationship(self, relationship_id: str) -> None:
+        """Delete a concept relationship."""
+        self.repository.delete_concept_relationship(relationship_id=relationship_id)
+
+    def list_concept_relationships(
+        self,
+        course_id: str,
+        status: RelationshipStatus | str | None = None,
+        rel_type: RelationshipType | str | None = None,
+    ) -> list[ConceptRelationship]:
+        """List relationships for a course."""
+        return self.repository.list_concept_relationships(
+            course_id=course_id,
+            status=status,
+            rel_type=rel_type,
+        )
+
+    def get_prerequisites(
+        self,
+        course_id: str,
+        concept_id: str,
+        recursive: bool = True,
+    ) -> list[str]:
+        """Retrieve prerequisite concept IDs for a target concept."""
+        graph = self.repository.get_concept_graph(course_id)
+        return graph.get_prerequisite_ids(concept_id, recursive=recursive)
+
+    # ---------------------------------------------------------------------------
+    # Stage 6: Transparent Adaptive Study Planner
+    # ---------------------------------------------------------------------------
+
+    def generate_adaptive_study_plan(
+        self,
+        learner_id: str = "learner_default",
+        course_id: str | None = None,
+        target_concept_id: str | None = None,
+        time_budget_minutes: int | None = None,
+        max_items: int = 10,
+    ) -> AdaptiveStudyPlan:
+        """Generate a deterministic, prioritized study plan for today."""
+        planner = AdaptivePlannerService(db=self.db, repository=self.repository)
+        return planner.generate_plan(
+            learner_id=learner_id,
+            course_id=course_id,
+            target_concept_id=target_concept_id,
+            time_budget_minutes=time_budget_minutes,
+            max_items=max_items,
+        )

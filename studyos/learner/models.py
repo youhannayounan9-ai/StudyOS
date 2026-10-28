@@ -59,6 +59,92 @@ class LearnerProfile(BaseModel):
         return clean
 
 
+class ConceptReviewStatus(str, Enum):
+    """Review and acceptance status of a concept in the course catalog."""
+
+    PROPOSED = "proposed"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+
+
+class ConceptProvenance(str, Enum):
+    """Source provenance of a concept."""
+
+    MANUAL = "manual"
+    ASSESSMENT_DERIVED = "assessment_derived"
+    DISCOVERED = "discovered"
+
+
+class RelationshipType(str, Enum):
+    """Type of semantic relationship between two concepts."""
+
+    PREREQUISITE = "prerequisite"  # source should precede target
+    RELATED = "related"            # meaningful semantic association without ordering
+
+
+class RelationshipStatus(str, Enum):
+    """Review status of a concept relationship edge."""
+
+    PROPOSED = "proposed"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+
+
+class RelationshipProvenance(str, Enum):
+    """Origin of a concept relationship."""
+
+    MANUAL = "manual"
+    METADATA_DERIVED = "metadata_derived"
+    MODEL_PROPOSED = "model_proposed"
+    DISCOVERED = "discovered"
+
+
+class ConceptRelationship(BaseModel):
+    """Course-scoped directed relationship edge between two concepts."""
+
+    id: str
+    course_id: str
+    source_concept_id: str
+    target_concept_id: str
+    relationship_type: RelationshipType
+    provenance: RelationshipProvenance = Field(default=RelationshipProvenance.MANUAL)
+    source_evidence: str | None = None
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    review_status: RelationshipStatus = Field(default=RelationshipStatus.ACCEPTED)
+    created_at: str | None = None
+    updated_at: str | None = None
+    source_concept_name: str | None = None
+    target_concept_name: str | None = None
+
+
+class DiscoveredConcept(BaseModel):
+    """A concept candidate discovered directly from ingested source material."""
+
+    name: str
+    normalized_name: str
+    description: str | None = None
+    learning_objectives: list[str] = Field(default_factory=list)
+    supporting_chunk_ids: list[str] = Field(default_factory=list)
+    provenance: ConceptProvenance = Field(default=ConceptProvenance.DISCOVERED)
+    review_status: ConceptReviewStatus = Field(default=ConceptReviewStatus.ACCEPTED)
+    source_locations: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class DiscoveryResult(BaseModel):
+    """Summary outcome of a direct concept discovery run."""
+
+    run_id: str
+    course_id: str
+    document_id: str | None = None
+    status: str
+    concepts_discovered: list[DiscoveredConcept] = Field(default_factory=list)
+    total_discovered: int = 0
+    new_concepts_created: int = 0
+    existing_concepts_updated: int = 0
+    chunks_scanned: int = 0
+    error_message: str | None = None
+
+
 class Concept(BaseModel):
     """Course-scoped concept catalog entry."""
 
@@ -67,6 +153,9 @@ class Concept(BaseModel):
     name: str
     normalized_name: str
     description: str | None = None
+    review_status: ConceptReviewStatus = Field(default=ConceptReviewStatus.ACCEPTED)
+    provenance: ConceptProvenance = Field(default=ConceptProvenance.ASSESSMENT_DERIVED)
+    learning_objectives: list[str] = Field(default_factory=list)
     created_at: str | None = None
     updated_at: str | None = None
 
@@ -117,9 +206,13 @@ class ConceptMastery(BaseModel):
     )
     last_assessed_at: str | None = None
     next_review_due: str | None = None
-    interval_days: float = Field(default=1.0, ge=1.0, le=180.0)
+    interval_days: float = Field(default=1.0, ge=1.0, le=365.0)
     ease_factor: float = Field(default=2.5, ge=1.3, le=3.0)
     repetition_count: int = Field(default=0, ge=0)
+    stability: float = Field(default=1.0, ge=0.1, description="Memory stability in days (R=0.90 interval)")
+    difficulty: float = Field(default=5.0, ge=1.0, le=10.0, description="Inherent concept difficulty (1.0 to 10.0)")
+    retrievability: float = Field(default=1.0, ge=0.0, le=1.0, description="Estimated current memory retention")
+    scheduler_policy: str = Field(default="local-fsrs-v1", description="Active scheduler policy")
     updated_at: str | None = None
 
 
@@ -154,6 +247,9 @@ class ReviewTask(BaseModel):
     is_overdue: bool = False
     completed_at: str | None = None
     rating: ReviewRating | None = None
+    scheduler_policy: str = Field(default="local-fsrs-v1")
+    scheduled_interval: float = Field(default=1.0)
+    estimated_retention: float = Field(default=1.0)
     created_at: str | None = None
 
 
@@ -174,6 +270,12 @@ class ConceptProgressSummary(BaseModel):
     next_review_due: str | None = None
     is_review_due: bool = False
     is_review_overdue: bool = False
+    stability: float = 1.0
+    difficulty: float = 5.0
+    retrievability: float = 1.0
+    scheduler_policy: str = "local-fsrs-v1"
+    prerequisites: list[str] = Field(default_factory=list)
+    unmet_prerequisites: list[str] = Field(default_factory=list)
     status_display: str
     explanation_reason: str
 

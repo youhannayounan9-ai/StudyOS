@@ -13,9 +13,9 @@ def test_fresh_database_applies_all_migrations(tmp_path):
     db.migrate()
 
     with db.get_connection() as conn:
-        # Verify schema_migrations versions 1 through 6
+        # Verify schema_migrations versions 1 through 7
         versions = [r["version"] for r in conn.execute("SELECT version FROM schema_migrations ORDER BY version ASC;").fetchall()]
-        assert versions == [1, 2, 3, 4, 5, 6]
+        assert versions == [1, 2, 3, 4, 5, 6, 7]
 
         # Verify Stage 5 tables exist
         tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table';").fetchall()]
@@ -100,7 +100,7 @@ def test_stage4_to_stage5_upgrade_safety(tmp_path):
     with db.get_connection() as check_conn:
         # Check migrations recorded
         versions = [r["version"] for r in check_conn.execute("SELECT version FROM schema_migrations ORDER BY version ASC;").fetchall()]
-        assert versions == [1, 2, 3, 4, 5, 6]
+        assert versions == [1, 2, 3, 4, 5, 6, 7]
 
         # Verify existing data preserved
         exam_row = check_conn.execute("SELECT * FROM exams WHERE id = 'ex_stage4';").fetchone()
@@ -129,4 +129,4 @@ def test_repeated_migration_is_idempotent(tmp_path):
 
     with db.get_connection() as conn:
         count = conn.execute("SELECT COUNT(*) as cnt FROM schema_migrations;").fetchone()["cnt"]
-        assert count == 6
+        assert count == 7

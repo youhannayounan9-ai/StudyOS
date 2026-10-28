@@ -6,20 +6,20 @@ StudyOS is an intelligent personal study environment designed for computer scien
 
 ---
 
-## Current Status: Stage 5 — Implementation in review (Learner Model, Mastery Tracking & Personalized Revision)
+## Current Status: Stage 6 — Implementation in review (Advanced Adaptive Learning, Knowledge Graph & External Research)
 
-StudyOS is developed under a disciplined, incremental engineering roadmap. Stage 0 (Architecture & Specification), Stage 1 (Document Ingestion Engine), Stage 2 (Hybrid Retrieval & Evidence Grounding Engine), Stage 3 (AI Tutor & Grounded Interactive Answering), and Stage 4 (Exam Generation, Submission & Automated Grading Engine) are complete and committed to the baseline. Stage 5 (Learner Model, Mastery Tracking & Personalized Revision) is implemented and verified with 222 automated tests passing, currently undergoing review.
+StudyOS is developed under a disciplined, incremental engineering roadmap. Stage 0 (Architecture & Specification), Stage 1 (Document Ingestion Engine), Stage 2 (Hybrid Retrieval & Evidence Grounding Engine), Stage 3 (AI Tutor & Grounded Interactive Answering), Stage 4 (Exam Generation, Submission & Automated Grading Engine), and Stage 5 (Learner Model, Mastery Tracking & Personalized Revision) are complete and committed to the baseline. Stage 6 (Advanced Adaptive Learning, Knowledge Graph & External Research) is implemented and verified with 277 automated tests passing, currently undergoing review.
 
 - [x] **Stage 0: Architecture & Specification** *(Approved & Baseline Committed at `1827f1a`)*
 - [x] **Stage 1: Document Ingestion, Parsing & Normalization Engine** *(Approved & Baseline Committed at `84db803`)*
 - [x] **Stage 2: Hybrid Retrieval & Evidence Grounding Engine** *(Approved & Baseline Committed at `7026c4c`)*
 - [x] **Stage 3: AI Tutor & Grounded Interactive Answering** *(Approved & Baseline Committed at `3d9e26e`)*
 - [x] **Stage 4: Exam Generation, Submission & Automated Grading Engine** *(Approved & Baseline Committed at `7351c60`)*
-- [ ] **Stage 5: Learner Model, Mastery Tracking & Personalized Revision** *(Implementation in review)*
-- [ ] **Stage 6: Adaptive Learning, Spaced Repetition & External Research**
+- [x] **Stage 5: Learner Model, Mastery Tracking & Personalized Revision** *(Approved & Baseline Committed at `73d49bf`)*
+- [ ] **Stage 6: Advanced Adaptive Learning, Knowledge Graph & External Research** *(Implementation in review)*
 - [ ] **Stage 7: Comprehensive Evaluation, Security & Portfolio Polish**
 
-*Note: In accordance with Stage 5 scope, the learner model provides persistent, course-scoped concept tracking, Laplace-smoothed empirical mastery estimation, chronological study event logging, bounded offline spaced-repetition review scheduling, and explainable study recommendations without calling external cloud services or treating unassessed material as failure.*
+*Note: In accordance with Stage 6 scope, StudyOS provides direct concept discovery from raw chunks, course-scoped prerequisite DAGs with deterministic cycle prevention, forgetting-aware review scheduling (local-fsrs-v1), a transparent adaptive study planner, and explicit opt-in external research with SSRF safety and citation validation, without cloud telemetry or data leakage.*
 
 ---
 
@@ -453,7 +453,80 @@ StudyOS provides an operational, local-first learner model CLI:
 
 ---
 
-### 8. Partial Failure Handling & Index Recovery
+### 8. Stage 6 Knowledge Graph, FSRS Review Scheduler & External Research Architecture
+
+```
+                 Ingested Document Chunks
+                            │
+                            ▼
+               [Direct Concept Discovery]
+             - Structural headings & breadcrumbs
+             - Bounded local JSON extraction
+             - Chunk provenance in concept_chunks
+             - Status: proposed / accepted / rejected
+                            │
+                            ▼
+               [Course-Scoped Concept Graph]
+             - Prerequisite (A -> B) & Related edges
+             - Strict course isolation (same course)
+             - BFS / Kahn's DAG cycle detection
+                            │
+                            ▼
+          [Forgetting-Aware Review Scheduler (DSR)]
+        - Policy: 'local-fsrs-v1'
+        - Stability S, Difficulty D, Retrievability R:
+            R(t, S) = (1 + 19/81 * t/S)^(-0.5)
+        - Retention target: 90%
+        - Bounds: [1.0, 365.0] days
+                            │
+                            ▼
+            [Transparent Adaptive Study Planner]
+        - Deterministic ranking:
+            1. Overdue Spaced Reviews
+            2. Unmet Target Prerequisites
+            3. Due Spaced Reviews
+            4. Weak Concept Remediation
+            5. Target Concept Focus
+            6. Gathering Evidence (< 3 obs)
+            7. Initial Diagnostics
+        - Time-budgeted scheduling (e.g. 20, 30, 60 min)
+        - Zero runtime LLM calls
+                            │
+                            ▼
+        [Explicit Opt-In External Research (--external-research)]
+      - Strict privacy boundary: Zero document notes sent to search
+      - Network SSRF defense: Blocks loopback, RFC 1918, link-local, cloud metadata
+      - Free, keyless providers: Wikipedia REST Search API & FakeSearchProvider
+      - Application-assigned citations: [EXT-1], [EXT-2], ...
+      - Citation validation: Hallucinated [EXT-99] rejected and sanitized
+      - Untrusted content envelope for prompt injection defense
+```
+
+#### CLI Operations for Stage 6
+
+```powershell
+# Direct concept discovery from raw chunks
+python scripts/learner.py discover-concepts --course "CS101" --max-chunks 15
+
+# View concept relationships
+python scripts/learner.py relationships --course "CS101"
+
+# Add a prerequisite edge (DAG cycle detection enforced)
+python scripts/learner.py add-relationship --course "CS101" --source "cpt_arrays" --target "cpt_lists" --type prerequisite
+
+# Topological prerequisite order for a target concept
+python scripts/learner.py prerequisites --course "CS101" --concept-id "cpt_dijkstra"
+
+# Generate today's adaptive study plan with a 30-minute time budget
+python scripts/learner.py plan --course "CS101" --time-budget 30
+
+# Explicit opt-in external research with Wikipedia and verified citations
+python scripts/learner.py research --query "Dijkstra algorithm priority queue" --course "CS101" --external-research
+```
+
+---
+
+### 9. Partial Failure Handling & Index Recovery
 - **Non-blocking Indexing**: Ingestion transactions in SQLite commit independently. If vector embedding or ChromaDB indexing fails post-commit (e.g., if Ollama is paused or out of memory), the SQLite document and chunk data remain intact.
 - **Actionable Warnings**: The ingestion pipeline logs a partial failure warning with the exact recovery command.
 - **Idempotent Repair**: Running `python scripts/sync_index.py --sync` safely catches up unsynced chunks without duplicating or corrupting existing embeddings.
@@ -461,23 +534,27 @@ StudyOS provides an operational, local-first learner model CLI:
 
 ---
 
-### 9. Automated Testing Without Ollama
+### 10. Automated Testing Without Ollama
 The entire test suite is 100% deterministic and runs completely offline without requiring a running Ollama daemon or downloading models:
 - **Fake Embeddings**: Unit and integration tests inject `FakeEmbeddingProvider`, generating deterministic 384-dimensional vectors from SHA-256 hashes.
-- **Fake Chat Provider**: Tutor and exam tests inject `FakeChatProvider`, supporting queued responses, citation verification, and error simulation.
-- **Mock HTTP Layer**: Ollama API network tests simulate responses, timeouts, connection errors, and malformed JSON using mocked HTTP transports.
+- **Fake Chat Provider**: Tutor, exam, concept discovery, and research tests inject `FakeChatProvider`, supporting queued responses, citation verification, and error simulation.
+- **Mock HTTP Layer**: Ollama API and external network tests simulate responses, timeouts, connection errors, SSRF attempts, and malformed JSON using mocked HTTP transports.
 - **Temporary Storage**: All tests run against ephemeral SQLite databases and temporary directories for ChromaDB.
 
-Run the complete test suite:
+Run the complete test suite (277 passing tests):
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -v
 ```
 
 ---
 
-### 10. Current Known Limitations
+### 11. Current Known Limitations
 - **Citation Provenance vs. Claim Entailment**: The application strictly validates citation reference provenance (guaranteeing that every citation resolves to a real SQLite chunk retrieved for that query and rejecting invented markers). However, syntactic citation validation does not mathematically prove logical entailment of the generated claim. Formal natural language inference (NLI) evaluation is reserved for Stage 7.
 - **Assessment Structure vs. Pedagogical Validity**: The assessment engine deterministically validates question structure, schema, distractor uniqueness, single-correct-answer constraints, and evidence marker provenance. However, automated generation cannot guarantee pedagogical perfection or replace human instructor review.
+- **Local FSRS Model vs. Neurological Memory**: The review scheduling algorithm implements a documented, bounded DSR policy (`local-fsrs-v1`) calculating power-law retrievability $R(t,S)$. While mathematically principled, it is an empirical scheduling heuristic and does not prove neurological retention across all individuals.
+- **Course-Specific Concept Graphs vs. Universal Laws**: The prerequisite DAG represents course-specific instructional ordering derived from lecture materials or instructor input; it does not claim to define universal epistemology.
+- **External Web Sources vs. Course Truth**: External research findings are explicitly partitioned from course notes and tagged with `[EXT-N]`. A retrieved Wikipedia article never overwrites course notes or changes student mastery scores.
+- **Prompt Injection Defense in Depth**: Delimitation, untrusted envelopes, and token extraction provide robust defense against untrusted external web text and document-borne instructions, but prompt-injection defense remains defense-in-depth rather than a mathematical guarantee against language model non-determinism.
 - **Conservative Short-Answer Grading**: Open-ended question grading defaults to manual instructor review when offline to prevent hallucinated scoring. Automated model grading is strictly bounded by max points and criterion rubrics.
 - **Heuristic Concept Extraction**: Automated concept labeling uses bounded local LLM extraction or fallback topic extraction from question metadata. While deduplication prevents name collisions within courses, subtle synonymy (e.g., "Binary Search" vs. "B-Search") is handled via normalized strings and manual reassignment workflows.
 - **Heuristic Spaced Repetition**: The review scheduling algorithm uses bounded SM-2/Leitner intervals. While explainable and dependable offline, it is an empirical study policy rather than a mathematically optimal memory decay model.

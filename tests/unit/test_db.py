@@ -218,7 +218,7 @@ class TestDatabaseInitAndMigrations:
                     "SELECT version FROM schema_migrations ORDER BY version ASC;"
                 ).fetchall()
             ]
-            assert versions == [1, 2, 3, 4, 5, 6]
+            assert versions == [1, 2, 3, 4, 5, 6, 7]
 
             # Verify schema columns
             qa_cols = [r["name"] for r in conn.execute("PRAGMA table_info(question_attempts);").fetchall()]
@@ -472,7 +472,7 @@ class TestDatabaseInitAndMigrations:
         # Verify migration bookkeeping recorded versions 1 through 5
         with db.get_connection() as c:
             applied = [r["version"] for r in c.execute("SELECT version FROM schema_migrations ORDER BY version ASC;").fetchall()]
-            assert applied == [1, 2, 3, 4, 5, 6]
+            assert applied == [1, 2, 3, 4, 5, 6, 7]
 
             # Verify chunk_id foreign key constraint is now SET NULL
             post_fks = c.execute("PRAGMA foreign_key_list(exam_question_sources);").fetchall()

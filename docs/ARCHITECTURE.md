@@ -1,7 +1,7 @@
 # StudyOS — System Architecture & Technical Design Baseline
 
-- **Document Version:** 1.1.0
-- **Status:** Approved Baseline (Committed at 1827f1a) | Stage 1 Complete & Approved (Committed at 84db803) | Stage 2 Complete & Approved (Committed at 7026c4c) | Stage 3 Complete & Approved (Committed at 3d9e26e) | Stage 4 Complete & Approved (Committed at 7351c60) | Stage 5 Implementation in review
+- **Document Version:** 1.2.0
+- **Status:** Approved Baseline (Committed at 1827f1a) | Stage 1 Complete & Approved (Committed at 84db803) | Stage 2 Complete & Approved (Committed at 7026c4c) | Stage 3 Complete & Approved (Committed at 3d9e26e) | Stage 4 Complete & Approved (Committed at 7351c60) | Stage 5 Complete & Approved (Committed at 73d49bf) | Stage 6 Implementation in review
 - **System Target:** Local-First Personalized Learning Operating System
 - **Hardware Profile:** Windows 11 | NVIDIA RTX 5060 Laptop GPU (8 GB VRAM) | 16 GB System RAM
 
@@ -618,6 +618,66 @@ CREATE TABLE review_tasks (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(learner_id, concept_id)
+);
+
+-- ===========================================================================
+-- Stage 6: Concept Knowledge Graph, Discovery Runs & External Research Schema
+-- ===========================================================================
+
+-- Concept Relationships Table (Course-Scoped DAG with Prerequisite / Related Edges)
+CREATE TABLE concept_relationships (
+    id TEXT PRIMARY KEY,
+    course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+    source_concept_id TEXT NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+    target_concept_id TEXT NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+    relationship_type TEXT NOT NULL,           -- 'prerequisite', 'related'
+    provenance TEXT NOT NULL DEFAULT 'manual', -- 'manual', 'metadata_derived', 'model_proposed'
+    source_evidence TEXT,
+    confidence REAL NOT NULL DEFAULT 1.0,
+    review_status TEXT NOT NULL DEFAULT 'accepted', -- 'proposed', 'accepted', 'rejected'
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(course_id, source_concept_id, target_concept_id, relationship_type)
+);
+
+-- Concept Discovery Runs Table
+CREATE TABLE concept_discovery_runs (
+    id TEXT PRIMARY KEY,
+    course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+    document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+    status TEXT NOT NULL,                      -- 'completed', 'failed', 'empty'
+    concepts_discovered_count INTEGER NOT NULL DEFAULT 0,
+    chunks_processed_count INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- External Research Records Table (Explicit Opt-In Queries)
+CREATE TABLE external_research_records (
+    id TEXT PRIMARY KEY,
+    query TEXT NOT NULL,
+    course_id TEXT REFERENCES courses(id) ON DELETE SET NULL,
+    summary TEXT,
+    status TEXT NOT NULL DEFAULT 'success',    -- 'success', 'empty', 'failed'
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- External Research Sources Table (Application-Assigned Citations [EXT-N])
+CREATE TABLE external_research_sources (
+    id TEXT PRIMARY KEY,
+    research_id TEXT NOT NULL REFERENCES external_research_records(id) ON DELETE CASCADE,
+    citation_index INTEGER NOT NULL,          -- e.g. 1 for [EXT-1]
+    url TEXT NOT NULL,
+    title TEXT NOT NULL,
+    publisher TEXT,
+    published_date TEXT,
+    retrieved_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    snippet TEXT,
+    source_type TEXT NOT NULL DEFAULT 'web_page',
+    is_valid INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(research_id, citation_index)
 );
 ```
 

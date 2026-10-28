@@ -9,19 +9,33 @@ import math
 from typing import Sequence
 import uuid
 
+from studyos.learner.graph import ConceptGraph, CycleDetectedError
 from studyos.learner.mastery import calculate_concept_mastery
 from studyos.learner.models import (
     Concept,
     ConceptMastery,
+    ConceptProvenance,
+    ConceptRelationship,
+    ConceptReviewStatus,
     LearnerEvent,
     LearnerEventType,
     LearnerProfile,
     MasteryCategory,
+    RelationshipProvenance,
+    RelationshipStatus,
+    RelationshipType,
     ReviewRating,
     ReviewStatus,
     ReviewTask,
 )
-from studyos.learner.scheduler import compute_next_schedule, is_review_due, is_review_overdue
+from studyos.learner.scheduler import (
+    calculate_retrievability,
+    compute_fsrs_schedule,
+    compute_next_schedule,
+    is_review_due,
+    is_review_overdue,
+    map_grade_to_rating,
+)
 from studyos.storage.db import Database
 
 logger = logging.getLogger(__name__)
@@ -87,11 +101,18 @@ class LearnerRepository:
         course_id: str,
         name: str,
         description: str | None = None,
+        review_status: ConceptReviewStatus | str = ConceptReviewStatus.ACCEPTED,
+        provenance: ConceptProvenance | str = ConceptProvenance.ASSESSMENT_DERIVED,
+        learning_objectives: list[str] | None = None,
     ) -> Concept:
         """Retrieve existing concept within course or insert new concept (unique on course_id, normalized_name)."""
         from studyos.learner.concept_mapper import normalize_concept_name
 
         norm = normalize_concept_name(name)
+        status_val = ConceptReviewStatus(review_status).value
+        prov_val = ConceptProvenance(provenance).value
+        objs_json = json.dumps(learning_objectives) if learning_objectives else None
+
         with self.db.transaction() as conn:
             # Verify course exists
             course = conn.execute("SELECT id FROM courses WHERE id = ?;", (course_id,)).fetchone()
@@ -100,91 +121,87 @@ class LearnerRepository:
 
             row = conn.execute(
                 """
-                SELECT id, course_id, name, normalized_name, description, created_at, updated_at
-                FROM concepts
+                SELECT * FROM concepts
                 WHERE course_id = ? AND normalized_name = ?;
                 """,
                 (course_id, norm),
             ).fetchone()
             if row:
-                return Concept(
-                    id=row["id"],
-                    course_id=row["course_id"],
-                    name=row["name"],
-                    normalized_name=row["normalized_name"],
-                    description=row["description"],
-                    created_at=str(row["created_at"]) if row["created_at"] else None,
-                    updated_at=str(row["updated_at"]) if row["updated_at"] else None,
-                )
+                return self._row_to_concept(row)
 
             cid = f"cpt_{uuid.uuid4().hex[:12]}"
             conn.execute(
                 """
-                INSERT INTO concepts (id, course_id, name, normalized_name, description)
-                VALUES (?, ?, ?, ?, ?);
+                INSERT INTO concepts (id, course_id, name, normalized_name, description, review_status, provenance, learning_objectives)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?);
                 """,
-                (cid, course_id, name.strip(), norm, description),
+                (cid, course_id, name.strip(), norm, description, status_val, prov_val, objs_json),
             )
-            return Concept(
-                id=cid,
-                course_id=course_id,
-                name=name.strip(),
-                normalized_name=norm,
-                description=description,
-            )
+            created_row = conn.execute("SELECT * FROM concepts WHERE id = ?;", (cid,)).fetchone()
+            return self._row_to_concept(created_row)
 
     def get_concept(self, concept_id: str) -> Concept | None:
         """Retrieve concept by ID."""
         with self.db.get_connection() as conn:
             row = conn.execute(
-                """
-                SELECT id, course_id, name, normalized_name, description, created_at, updated_at
-                FROM concepts WHERE id = ?;
-                """,
+                "SELECT * FROM concepts WHERE id = ?;",
                 (concept_id,),
             ).fetchone()
             if not row:
                 return None
-            return Concept(
-                id=row["id"],
-                course_id=row["course_id"],
-                name=row["name"],
-                normalized_name=row["normalized_name"],
-                description=row["description"],
-                created_at=str(row["created_at"]) if row["created_at"] else None,
-                updated_at=str(row["updated_at"]) if row["updated_at"] else None,
-            )
+            return self._row_to_concept(row)
 
-    def list_concepts(self, course_id: str | None = None) -> list[Concept]:
-        """List concepts, optionally filtered by course."""
+    def list_concepts(
+        self,
+        course_id: str | None = None,
+        status: ConceptReviewStatus | str | None = None,
+    ) -> list[Concept]:
+        """List concepts, optionally filtered by course and review status."""
+        query = "SELECT * FROM concepts WHERE 1=1"
+        params: list[Any] = []
+        if course_id:
+            query += " AND course_id = ?"
+            params.append(course_id)
+        if status:
+            query += " AND review_status = ?"
+            params.append(ConceptReviewStatus(status).value)
+        query += " ORDER BY name ASC;"
+
         with self.db.get_connection() as conn:
-            if course_id:
-                rows = conn.execute(
-                    """
-                    SELECT id, course_id, name, normalized_name, description, created_at, updated_at
-                    FROM concepts WHERE course_id = ? ORDER BY name ASC;
-                    """,
-                    (course_id,),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    """
-                    SELECT id, course_id, name, normalized_name, description, created_at, updated_at
-                    FROM concepts ORDER BY name ASC;
-                    """
-                ).fetchall()
-            return [
-                Concept(
-                    id=r["id"],
-                    course_id=r["course_id"],
-                    name=r["name"],
-                    normalized_name=r["normalized_name"],
-                    description=r["description"],
-                    created_at=str(r["created_at"]) if r["created_at"] else None,
-                    updated_at=str(r["updated_at"]) if r["updated_at"] else None,
-                )
-                for r in rows
-            ]
+            rows = conn.execute(query, params).fetchall()
+            return [self._row_to_concept(r) for r in rows]
+
+    @staticmethod
+    def _row_to_concept(row) -> Concept:
+        learning_objs = []
+        if "learning_objectives" in row.keys() and row["learning_objectives"]:
+            try:
+                learning_objs = json.loads(row["learning_objectives"])
+            except Exception:
+                learning_objs = []
+        rev_status = (
+            ConceptReviewStatus(row["review_status"])
+            if ("review_status" in row.keys() and row["review_status"])
+            else ConceptReviewStatus.ACCEPTED
+        )
+        prov = (
+            ConceptProvenance(row["provenance"])
+            if ("provenance" in row.keys() and row["provenance"])
+            else ConceptProvenance.ASSESSMENT_DERIVED
+        )
+
+        return Concept(
+            id=row["id"],
+            course_id=row["course_id"],
+            name=row["name"],
+            normalized_name=row["normalized_name"],
+            description=row["description"],
+            review_status=rev_status,
+            provenance=prov,
+            learning_objectives=learning_objs,
+            created_at=str(row["created_at"]) if row["created_at"] else None,
+            updated_at=str(row["updated_at"]) if row["updated_at"] else None,
+        )
 
     def map_question_to_concept(self, question_id: str, concept_id: str) -> None:
         """Link an assessment question to a concept."""
@@ -535,9 +552,10 @@ class LearnerRepository:
             INSERT INTO concept_mastery (
                 id, learner_id, concept_id, course_id, mastery_score, mastery_category,
                 observation_count, correct_count, incorrect_count, uncertainty, last_assessed_at,
-                next_review_due, interval_days, ease_factor, repetition_count, updated_at
+                next_review_due, interval_days, ease_factor, repetition_count,
+                stability, difficulty, retrievability, scheduler_policy, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(learner_id, concept_id) DO UPDATE SET
                 mastery_score = excluded.mastery_score,
                 mastery_category = excluded.mastery_category,
@@ -550,6 +568,10 @@ class LearnerRepository:
                 interval_days = excluded.interval_days,
                 ease_factor = excluded.ease_factor,
                 repetition_count = excluded.repetition_count,
+                stability = excluded.stability,
+                difficulty = excluded.difficulty,
+                retrievability = excluded.retrievability,
+                scheduler_policy = excluded.scheduler_policy,
                 updated_at = CURRENT_TIMESTAMP;
         """
         params = (
@@ -568,6 +590,10 @@ class LearnerRepository:
             mastery.interval_days,
             mastery.ease_factor,
             mastery.repetition_count,
+            mastery.stability,
+            mastery.difficulty,
+            mastery.retrievability,
+            mastery.scheduler_policy,
         )
         if conn is not None:
             conn.execute(sql, params)
@@ -668,6 +694,27 @@ class LearnerRepository:
         reps = int(existing["repetition_count"]) if existing else 0
         due = str(existing["next_review_due"]) if (existing and existing["next_review_due"]) else None
 
+        stability = (
+            float(existing["stability"])
+            if (existing and "stability" in existing.keys() and existing["stability"] is not None)
+            else interval
+        )
+        difficulty = (
+            float(existing["difficulty"])
+            if (existing and "difficulty" in existing.keys() and existing["difficulty"] is not None)
+            else 5.0
+        )
+        retrievability = (
+            float(existing["retrievability"])
+            if (existing and "retrievability" in existing.keys() and existing["retrievability"] is not None)
+            else 1.0
+        )
+        policy = (
+            str(existing["scheduler_policy"])
+            if (existing and "scheduler_policy" in existing.keys() and existing["scheduler_policy"] is not None)
+            else "local-fsrs-v1"
+        )
+
         mastery_obj = ConceptMastery(
             id=existing["id"] if existing else f"cpm_{uuid.uuid4().hex[:12]}",
             learner_id=learner_id,
@@ -687,6 +734,10 @@ class LearnerRepository:
             interval_days=interval,
             ease_factor=ease,
             repetition_count=reps,
+            stability=stability,
+            difficulty=difficulty,
+            retrievability=retrievability,
+            scheduler_policy=policy,
         )
         self.upsert_concept_mastery(mastery_obj)
         return mastery_obj
@@ -701,6 +752,9 @@ class LearnerRepository:
         concept_id: str,
         course_id: str,
         due_date: str,
+        scheduler_policy: str = "local-fsrs-v1",
+        scheduled_interval: float | None = None,
+        estimated_retention: float | None = None,
     ) -> ReviewTask:
         """Schedule or reschedule a review task for a concept."""
         with self.db.transaction() as conn:
@@ -716,17 +770,37 @@ class LearnerRepository:
             if row:
                 tid = row["id"]
                 conn.execute(
-                    "UPDATE review_tasks SET due_date = ? WHERE id = ?;",
-                    (due_date, tid),
+                    """
+                    UPDATE review_tasks
+                    SET due_date = ?,
+                        scheduler_policy = ?,
+                        scheduled_interval = COALESCE(?, scheduled_interval),
+                        estimated_retention = COALESCE(?, estimated_retention)
+                    WHERE id = ?;
+                    """,
+                    (due_date, scheduler_policy, scheduled_interval, estimated_retention, tid),
                 )
             else:
                 tid = f"rvt_{uuid.uuid4().hex[:12]}"
                 conn.execute(
                     """
-                    INSERT INTO review_tasks (id, learner_id, concept_id, course_id, due_date, status)
-                    VALUES (?, ?, ?, ?, ?, ?);
+                    INSERT INTO review_tasks (
+                        id, learner_id, concept_id, course_id, due_date, status,
+                        scheduler_policy, scheduled_interval, estimated_retention
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """,
-                    (tid, learner_id, concept_id, course_id, due_date, ReviewStatus.SCHEDULED.value),
+                    (
+                        tid,
+                        learner_id,
+                        concept_id,
+                        course_id,
+                        due_date,
+                        ReviewStatus.SCHEDULED.value,
+                        scheduler_policy,
+                        scheduled_interval or 1.0,
+                        estimated_retention or 1.0,
+                    ),
                 )
 
         task = self.get_review_task(tid)
@@ -781,6 +855,7 @@ class LearnerRepository:
         self,
         task_id: str,
         rating: ReviewRating,
+        policy: str | None = None,
     ) -> ReviewTask:
         """Mark a review task completed, update concept schedule, and queue next review."""
         task = self.get_review_task(task_id)
@@ -792,12 +867,25 @@ class LearnerRepository:
         current_interval = mastery.interval_days if mastery else 1.0
         current_ease = mastery.ease_factor if mastery else 2.5
         reps = mastery.repetition_count if mastery else 0
+        current_stability = mastery.stability if mastery else 1.0
+        current_difficulty = mastery.difficulty if mastery else 5.0
+        selected_policy = policy or (mastery.scheduler_policy if mastery else "local-fsrs-v1")
+        last_rev = None
+        if mastery and mastery.last_assessed_at:
+            try:
+                last_rev = datetime.fromisoformat(mastery.last_assessed_at)
+            except Exception:
+                pass
 
         schedule = compute_next_schedule(
             current_interval=current_interval,
             current_ease=current_ease,
             repetition_count=reps,
             rating_or_correctness=rating,
+            policy=selected_policy,
+            stability=current_stability,
+            difficulty=current_difficulty,
+            last_reviewed_at=last_rev,
         )
 
         with self.db.transaction() as conn:
@@ -838,6 +926,10 @@ class LearnerRepository:
                 mastery.interval_days = schedule.interval_days
                 mastery.ease_factor = schedule.ease_factor
                 mastery.repetition_count = schedule.repetition_count
+                mastery.stability = schedule.stability
+                mastery.difficulty = schedule.difficulty
+                mastery.retrievability = schedule.estimated_retention
+                mastery.scheduler_policy = schedule.scheduler_policy
                 mastery.next_review_due = due_iso
                 self.upsert_concept_mastery(mastery, conn=conn)
 
@@ -845,8 +937,11 @@ class LearnerRepository:
             next_tid = f"rvt_{uuid.uuid4().hex[:12]}"
             conn.execute(
                 """
-                INSERT INTO review_tasks (id, learner_id, concept_id, course_id, due_date, status)
-                VALUES (?, ?, ?, ?, ?, ?);
+                INSERT INTO review_tasks (
+                    id, learner_id, concept_id, course_id, due_date, status,
+                    scheduler_policy, scheduled_interval, estimated_retention
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """,
                 (
                     next_tid,
@@ -855,6 +950,9 @@ class LearnerRepository:
                     task.course_id,
                     due_iso,
                     ReviewStatus.SCHEDULED.value,
+                    schedule.scheduler_policy,
+                    schedule.interval_days,
+                    schedule.estimated_retention,
                 ),
             )
 
@@ -864,8 +962,272 @@ class LearnerRepository:
         return updated_task
 
     # ---------------------------------------------------------------------------
+    # Concept Relationships (Graph) Operations
+    # ---------------------------------------------------------------------------
+
+    def add_concept_relationship(
+        self,
+        course_id: str,
+        source_concept_id: str,
+        target_concept_id: str,
+        relationship_type: RelationshipType | str,
+        provenance: RelationshipProvenance | str = RelationshipProvenance.MANUAL,
+        source_evidence: str | None = None,
+        confidence: float = 1.0,
+        review_status: RelationshipStatus | str = RelationshipStatus.ACCEPTED,
+    ) -> ConceptRelationship:
+        """Create or update a directed relationship between two concepts in the same course.
+
+        Enforces:
+        - Self-referencing edges are strictly rejected.
+        - Source and target concepts must both exist and belong to course_id.
+        - Accepted prerequisite edges must be strictly acyclic (raises CycleDetectedError).
+        """
+        if source_concept_id == target_concept_id:
+            raise ValueError("Self-referencing relationship is not allowed.")
+
+        rel_type = RelationshipType(relationship_type)
+        status = RelationshipStatus(review_status)
+        prov = RelationshipProvenance(provenance)
+
+        with self.db.transaction() as conn:
+            # 1. Verify concepts exist and belong to course_id
+            c_rows = conn.execute(
+                "SELECT id, course_id, name FROM concepts WHERE id IN (?, ?);",
+                (source_concept_id, target_concept_id),
+            ).fetchall()
+            found = {r["id"]: r for r in c_rows}
+            if source_concept_id not in found:
+                raise ValueError(f"Source concept '{source_concept_id}' not found.")
+            if target_concept_id not in found:
+                raise ValueError(f"Target concept '{target_concept_id}' not found.")
+
+            if found[source_concept_id]["course_id"] != course_id or found[target_concept_id]["course_id"] != course_id:
+                raise ValueError(f"Cross-course relationship rejected: concepts must belong to course '{course_id}'.")
+
+            # 2. Cycle validation for accepted prerequisites
+            if rel_type == RelationshipType.PREREQUISITE and status == RelationshipStatus.ACCEPTED:
+                existing_rels = self.list_concept_relationships(
+                    course_id=course_id,
+                    status=RelationshipStatus.ACCEPTED,
+                    rel_type=RelationshipType.PREREQUISITE,
+                    conn=conn,
+                )
+                graph = ConceptGraph(course_id, existing_rels)
+                if graph.would_create_cycle(source_concept_id, target_concept_id):
+                    raise CycleDetectedError(
+                        f"Cycle detected: adding prerequisite from '{source_concept_id}' to "
+                        f"'{target_concept_id}' would create a directed cycle in course '{course_id}'."
+                    )
+
+            rid = f"cr_{uuid.uuid4().hex[:12]}"
+            conn.execute(
+                """
+                INSERT INTO concept_relationships (
+                    id, course_id, source_concept_id, target_concept_id,
+                    relationship_type, provenance, source_evidence, confidence, review_status, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(course_id, source_concept_id, target_concept_id, relationship_type) DO UPDATE SET
+                    provenance = excluded.provenance,
+                    source_evidence = excluded.source_evidence,
+                    confidence = excluded.confidence,
+                    review_status = excluded.review_status,
+                    updated_at = CURRENT_TIMESTAMP;
+                """,
+                (
+                    rid,
+                    course_id,
+                    source_concept_id,
+                    target_concept_id,
+                    rel_type.value,
+                    prov.value,
+                    source_evidence,
+                    max(0.0, min(1.0, confidence)),
+                    status.value,
+                ),
+            )
+
+            # Retrieve final row
+            final_row = conn.execute(
+                """
+                SELECT cr.*, s.name as source_concept_name, t.name as target_concept_name
+                FROM concept_relationships cr
+                JOIN concepts s ON cr.source_concept_id = s.id
+                JOIN concepts t ON cr.target_concept_id = t.id
+                WHERE cr.course_id = ? AND cr.source_concept_id = ? AND cr.target_concept_id = ? AND cr.relationship_type = ?;
+                """,
+                (course_id, source_concept_id, target_concept_id, rel_type.value),
+            ).fetchone()
+            return self._row_to_concept_relationship(final_row)
+
+    def update_relationship_status(
+        self,
+        relationship_id: str,
+        status: RelationshipStatus | str,
+    ) -> ConceptRelationship:
+        """Update review status of a relationship, validating cycles if accepting a prerequisite."""
+        new_status = RelationshipStatus(status)
+        with self.db.transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM concept_relationships WHERE id = ?;",
+                (relationship_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError(f"Concept relationship '{relationship_id}' not found.")
+
+            rel_type = RelationshipType(row["relationship_type"])
+            course_id = row["course_id"]
+            src_id = row["source_concept_id"]
+            tgt_id = row["target_concept_id"]
+
+            if rel_type == RelationshipType.PREREQUISITE and new_status == RelationshipStatus.ACCEPTED:
+                existing_rels = self.list_concept_relationships(
+                    course_id=course_id,
+                    status=RelationshipStatus.ACCEPTED,
+                    rel_type=RelationshipType.PREREQUISITE,
+                    conn=conn,
+                )
+                filtered_rels = [r for r in existing_rels if r.id != relationship_id]
+                graph = ConceptGraph(course_id, filtered_rels)
+                if graph.would_create_cycle(src_id, tgt_id):
+                    raise CycleDetectedError(
+                        f"Cannot accept relationship '{relationship_id}': creates a cycle in course '{course_id}'."
+                    )
+
+            conn.execute(
+                """
+                UPDATE concept_relationships
+                SET review_status = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?;
+                """,
+                (new_status.value, relationship_id),
+            )
+
+        updated = self.get_concept_relationship(relationship_id)
+        if not updated:
+            raise RuntimeError(f"Failed to load relationship '{relationship_id}'.")
+        return updated
+
+    def delete_concept_relationship(self, relationship_id: str) -> bool:
+        """Delete a concept relationship edge."""
+        with self.db.transaction() as conn:
+            res = conn.execute(
+                "DELETE FROM concept_relationships WHERE id = ?;",
+                (relationship_id,),
+            )
+            return res.rowcount > 0
+
+    def get_concept_relationship(self, relationship_id: str) -> ConceptRelationship | None:
+        """Retrieve relationship by ID."""
+        with self.db.get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT cr.*, s.name as source_concept_name, t.name as target_concept_name
+                FROM concept_relationships cr
+                JOIN concepts s ON cr.source_concept_id = s.id
+                JOIN concepts t ON cr.target_concept_id = t.id
+                WHERE cr.id = ?;
+                """,
+                (relationship_id,),
+            ).fetchone()
+            return self._row_to_concept_relationship(row) if row else None
+
+    def list_concept_relationships(
+        self,
+        course_id: str,
+        status: RelationshipStatus | str | None = None,
+        rel_type: RelationshipType | str | None = None,
+        conn: sqlite3.Connection | None = None,
+    ) -> list[ConceptRelationship]:
+        """List concept relationships within a course, optionally filtered by status or type."""
+        query = """
+            SELECT cr.*, s.name as source_concept_name, t.name as target_concept_name
+            FROM concept_relationships cr
+            JOIN concepts s ON cr.source_concept_id = s.id
+            JOIN concepts t ON cr.target_concept_id = t.id
+            WHERE cr.course_id = ?
+        """
+        params: list[Any] = [course_id]
+
+        if status:
+            stat_val = RelationshipStatus(status).value
+            query += " AND cr.review_status = ?"
+            params.append(stat_val)
+
+        if rel_type:
+            type_val = RelationshipType(rel_type).value
+            query += " AND cr.relationship_type = ?"
+            params.append(type_val)
+
+        query += " ORDER BY cr.created_at ASC;"
+
+        if conn is not None:
+            rows = conn.execute(query, params).fetchall()
+        else:
+            with self.db.get_connection() as c:
+                rows = c.execute(query, params).fetchall()
+
+        return [self._row_to_concept_relationship(r) for r in rows]
+
+    def get_concept_graph(self, course_id: str) -> ConceptGraph:
+        """Construct an in-memory ConceptGraph of accepted relationships for course_id."""
+        rels = self.list_concept_relationships(course_id=course_id, status=RelationshipStatus.ACCEPTED)
+        return ConceptGraph(course_id, rels)
+
+    def record_discovery_run(
+        self,
+        course_id: str,
+        document_id: str | None,
+        status: str,
+        concepts_discovered: int,
+        chunks_processed: int,
+        error_message: str | None = None,
+    ) -> str:
+        """Log a concept discovery run."""
+        run_id = f"run_{uuid.uuid4().hex[:12]}"
+        with self.db.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO concept_discovery_runs (
+                    id, course_id, document_id, status, concepts_discovered,
+                    chunks_processed, error_message, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP);
+                """,
+                (
+                    run_id,
+                    course_id,
+                    document_id,
+                    status,
+                    concepts_discovered,
+                    chunks_processed,
+                    error_message,
+                ),
+            )
+        return run_id
+
+    # ---------------------------------------------------------------------------
     # Helpers
     # ---------------------------------------------------------------------------
+
+    @staticmethod
+    def _row_to_concept_relationship(row) -> ConceptRelationship:
+        return ConceptRelationship(
+            id=row["id"],
+            course_id=row["course_id"],
+            source_concept_id=row["source_concept_id"],
+            target_concept_id=row["target_concept_id"],
+            relationship_type=RelationshipType(row["relationship_type"]),
+            provenance=RelationshipProvenance(row["provenance"]),
+            source_evidence=row["source_evidence"],
+            confidence=float(row["confidence"]) if row["confidence"] is not None else 1.0,
+            review_status=RelationshipStatus(row["review_status"]),
+            created_at=str(row["created_at"]) if row["created_at"] else None,
+            updated_at=str(row["updated_at"]) if row["updated_at"] else None,
+            source_concept_name=row["source_concept_name"] if "source_concept_name" in row.keys() else None,
+            target_concept_name=row["target_concept_name"] if "target_concept_name" in row.keys() else None,
+        )
 
     @staticmethod
     def _row_to_concept_mastery(row) -> ConceptMastery:
@@ -880,6 +1242,27 @@ class LearnerRepository:
             float(row["uncertainty"])
             if ("uncertainty" in row.keys() and row["uncertainty"] is not None)
             else estimate.uncertainty
+        )
+
+        stability = (
+            float(row["stability"])
+            if ("stability" in row.keys() and row["stability"] is not None)
+            else float(row["interval_days"])
+        )
+        difficulty = (
+            float(row["difficulty"])
+            if ("difficulty" in row.keys() and row["difficulty"] is not None)
+            else 5.0
+        )
+        retrievability = (
+            float(row["retrievability"])
+            if ("retrievability" in row.keys() and row["retrievability"] is not None)
+            else 1.0
+        )
+        policy = (
+            str(row["scheduler_policy"])
+            if ("scheduler_policy" in row.keys() and row["scheduler_policy"] is not None)
+            else "local-fsrs-v1"
         )
 
         return ConceptMastery(
@@ -901,6 +1284,10 @@ class LearnerRepository:
             interval_days=float(row["interval_days"]),
             ease_factor=float(row["ease_factor"]),
             repetition_count=int(row["repetition_count"]),
+            stability=stability,
+            difficulty=difficulty,
+            retrievability=retrievability,
+            scheduler_policy=policy,
             updated_at=str(row["updated_at"]) if row["updated_at"] else None,
         )
 
@@ -921,6 +1308,22 @@ class LearnerRepository:
         except Exception:
             pass
 
+        sched_policy = (
+            str(row["scheduler_policy"])
+            if ("scheduler_policy" in row.keys() and row["scheduler_policy"])
+            else "local-fsrs-v1"
+        )
+        sched_interval = (
+            float(row["scheduled_interval"])
+            if ("scheduled_interval" in row.keys() and row["scheduled_interval"] is not None)
+            else 1.0
+        )
+        est_ret = (
+            float(row["estimated_retention"])
+            if ("estimated_retention" in row.keys() and row["estimated_retention"] is not None)
+            else 1.0
+        )
+
         return ReviewTask(
             id=row["id"],
             learner_id=row["learner_id"],
@@ -933,5 +1336,8 @@ class LearnerRepository:
             is_overdue=is_over,
             completed_at=str(row["completed_at"]) if row["completed_at"] else None,
             rating=rating,
+            scheduler_policy=sched_policy,
+            scheduled_interval=sched_interval,
+            estimated_retention=est_ret,
             created_at=str(row["created_at"]) if row["created_at"] else None,
         )

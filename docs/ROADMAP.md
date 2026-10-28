@@ -1,7 +1,7 @@
 # StudyOS — Staged Development Roadmap & Execution Plan
 
-- **Document Version:** 1.1.0
-- **Status:** Approved Baseline (Committed at 1827f1a) | Stage 1 Complete & Approved (Committed at 84db803) | Stage 2 Complete & Approved (Committed at 7026c4c) | Stage 3 Complete & Approved (Committed at 3d9e26e) | Stage 4 Complete & Approved (Committed at 7351c60) | Stage 5 Implementation in review
+- **Document Version:** 1.2.0
+- **Status:** Approved Baseline (Committed at 1827f1a) | Stage 1 Complete & Approved (Committed at 84db803) | Stage 2 Complete & Approved (Committed at 7026c4c) | Stage 3 Complete & Approved (Committed at 3d9e26e) | Stage 4 Complete & Approved (Committed at 7351c60) | Stage 5 Complete & Approved (Committed at 73d49bf) | Stage 6 Implementation in review
 - **System Target:** Local-First Personalized Learning Operating System
 - **Hardware Profile:** Windows 11 | NVIDIA RTX 5060 Laptop GPU (8 GB VRAM) | 16 GB System RAM
 
@@ -14,7 +14,7 @@ StudyOS follows a disciplined, stage-gated engineering methodology:
 2. **First Usable Release Prioritization:** Stages 0 through 4 deliver the foundational, fully functional local study loop (Ingest $\rightarrow$ Retrieve $\rightarrow$ Tutor with Citations $\rightarrow$ Exam & Grade). Stages 5 through 7 enrich the cognitive modeling, adaptation, and system hardening.
 3. **Realistic Verification Time:** Hour estimates explicitly include debugging on Windows, edge-case testing, citation auditing, and learning curves.
 4. **No Premature Optimization:** Architectural modularity is established early, but complex features (e.g., cross-encoders, multimodal vision, external research) are gated behind stable core baselines.
-5. **Explicit Git Commit Checkpoints:** Work for each stage is reviewed and verified in the local working tree before being committed as a permanent baseline. Stage 0 documentation was approved and committed as baseline commit `1827f1a`; Stage 1 ingestion engine is approved and committed as baseline commit `84db803`; Stage 2 hybrid retrieval is committed as baseline commit `7026c4c`; Stage 3 AI tutor is committed as baseline commit `3d9e26e`; Stage 4 assessment engine is approved and committed as baseline commit `7351c60`; Stage 5 learner model and mastery tracking is currently implemented and under review.
+5. **Explicit Git Commit Checkpoints:** Work for each stage is reviewed and verified in the local working tree before being committed as a permanent baseline. Stage 0 documentation was approved and committed as baseline commit `1827f1a`; Stage 1 ingestion engine is approved and committed as baseline commit `84db803`; Stage 2 hybrid retrieval is committed as baseline commit `7026c4c`; Stage 3 AI tutor is committed as baseline commit `3d9e26e`; Stage 4 assessment engine is approved and committed as baseline commit `7351c60`; Stage 5 learner model and mastery tracking is approved and committed as baseline commit `73d49bf`; Stage 6 adaptive learning, concept graph, and external research is currently implemented and under review.
 
 ---
 
@@ -210,24 +210,37 @@ StudyOS follows a disciplined, stage-gated engineering methodology:
 
 ---
 
-### Stage 6: Adaptive Learning, Spaced Repetition & External Research
-- **Scope:** Implement spaced repetition scheduling (e.g., modified SM-2 or FSRS algorithm) calculating memory decay and review intervals. Support adaptive exam difficulty (raising question complexity as student mastery increases). Implement an *optional*, strictly controlled external research mode (retrieving academic definitions via Wikipedia / arXiv APIs to clarify prerequisites, clearly partitioned from primary course evidence).
-- **Explicit Non-Goals:** Unbounded internet browsing, social sharing features.
+### Stage 6: Advanced Adaptive Learning, Knowledge Graph & External Research
+- **Status:** Implementation in review.
+- **Scope:** Provide evidence-backed concept discovery from ingested documents independently of exams, course-scoped concept relationship graph (`prerequisite`, `related`) with deterministic DAG cycle detection, advanced forgetting-aware review scheduling (`local-fsrs-v1` DSR model with power-law retention), transparent adaptive study planner with time budgeting, and explicitly opt-in external research with strict privacy boundaries, SSRF prevention, and verified `[EXT-N]` citations.
+- **Explicit Non-Goals:** Unbounded internet browsing, automatic document leakage to external APIs, speculative psychological claims.
 - **Expected Deliverables:**
-  - `studyos.learner.spaced_repetition`: Retention decay scheduler.
-  - `studyos.research.external`: Controlled external documentation fetcher with clear source partitioning.
-  - UI notifications for topics due for review.
-  - Automated tests: `tests/unit/test_spaced_repetition.py`.
-- **Prerequisites:** Stage 5 complete.
+  - `studyos/learner/discovery.py`: `ConceptDiscoveryService` for direct chunk-grounded concept extraction with chunk provenance.
+  - `studyos/learner/graph.py`: `ConceptGraph` with BFS cycle detection, Kahn's topological sort, and course isolation.
+  - `studyos/learner/scheduler.py`: Advanced forgetting-aware scheduler (`local-fsrs-v1`) with power-law retrievability $R(t,S) = (1 + \frac{19}{81}\frac{t}{S})^{-0.5}$ and bounds $[1.0, 365.0]$d.
+  - `studyos/learner/planner.py`: `AdaptivePlannerService` with deterministic priority ranking and bounded time budgets.
+  - `studyos/research/`: External research package (`safety.py`, `service.py`, `repository.py`, `WikipediaSearchProvider`, `FakeSearchProvider`) with SSRF guards and citation validation.
+  - `scripts/learner.py`: CLI subcommands (`discover-concepts`, `relationships`, `add-relationship`, `prerequisites`, `plan`, `research`, `research-history`).
+  - Automated tests: `tests/unit/test_stage6_migrations.py`, `tests/unit/test_advanced_scheduler.py`, `tests/unit/test_concept_graph.py`, `tests/unit/test_concept_discovery.py`, `tests/unit/test_adaptive_planner.py`, `tests/unit/test_external_research.py`, `tests/integration/test_stage6_end_to_end.py`.
+- **Prerequisites:** Stage 5 complete and committed.
 - **Risks:**
-  - External research polluting course-specific definitions.
+  - Cycle introduction in concept prerequisite relationships (Mitigated by BFS traversal before edge insertion).
+  - External search SSRF or DNS rebinding (Mitigated by `SafeURLValidator` blocking loopback, private RFC 1918, link-local, and cloud metadata).
+  - Model hallucinated citations (Mitigated by application-assigned `[EXT-N]` indices and source set validation).
 - **Verification Commands & Procedures:**
-  - Test decay calculations: `pytest tests/unit/test_spaced_repetition.py -v`.
-  - Verify external research sources are visually demarcated with distinct warning badges in UI.
+  - Full test suite: `pytest -v` (277 passed).
+  - Direct discovery CLI test: `python scripts/learner.py discover-concepts --course <id>`.
+  - Concept graph inspection: `python scripts/learner.py relationships --course <id>`.
+  - Adaptive study plan: `python scripts/learner.py plan --course <id> --time-budget 30`.
+  - External research with opt-in: `python scripts/learner.py research --query "<text>" --external-research`.
 - **Acceptance Criteria:**
-  - Due review dates are calculated accurately based on past recall scores.
-  - External research is explicitly opt-in and visually separated from official course citations.
-- **Estimated Focused Hours:** 16–22 hours (Uncertainty: $\pm 30\%$).
+  - Concepts discovered from raw chunks retain chunk-level provenance in `concept_chunks`.
+  - Accepted prerequisite edges are strictly acyclic; cross-course edges are rejected.
+  - Forgetting-aware review scheduler calculates valid bounded intervals from graded history without penalizing pending manual reviews.
+  - Adaptive study planner produces transparent, time-budgeted plans using deterministic rules without runtime LLM calls.
+  - External research requires explicit user opt-in (`--external-research`); default study operations remain 100% offline.
+  - Zero private course text, uploaded documents, or study history is sent to external search providers.
+- **Estimated Focused Hours:** 16–22 hours (Completed in Stage 6).
 - **Dependencies:** Stage 5.
 
 ---
@@ -262,12 +275,12 @@ StudyOS follows a disciplined, stage-gated engineering methodology:
 | Stage | Focus Area | Deliverable Milestone | Focused Hours (Est.) | Cumulative Hours |
 | :---: | :--- | :--- | :---: | :---: |
 | **0** | **Architecture & Specification** | Specs, Architecture, Roadmap docs | **6–10 h** *(Done)* | 6–10 h |
-| **1** | **Document Ingestion & Storage** | Parsers, Chunking, SQLite DB | **14–20 h** | 20–30 h |
-| **2** | **Hybrid Retrieval Engine** | ChromaDB, FTS5 BM25, RRF Fusion | **12–18 h** | 32–48 h |
-| **3** | **AI Tutor with Citations** | Ollama 7B/8B, Grounding, Streamlit UI | **16–24 h** | 48–72 h |
+| **1** | **Document Ingestion & Storage** | Parsers, Chunking, SQLite DB | **14–20 h** *(Done)* | 20–30 h |
+| **2** | **Hybrid Retrieval Engine** | ChromaDB, FTS5 BM25, RRF Fusion | **12–18 h** *(Done)* | 32–48 h |
+| **3** | **AI Tutor with Citations** | Ollama 7B/8B, Grounding, Streamlit UI | **16–24 h** *(Done)* | 48–72 h |
 | **4** | **Assessment & Exam Engine** | Quiz Gen, Leak Prevention, Grading | **18–26 h** *(Done)* | 66–98 h |
-| **5** | **Persistent Learner Model** | Mastery Tracking, Spaced Revision | **14–20 h** *(Under Review)* | 80–118 h |
-| **6** | **Adaptive Learning & Research** | Spaced Repetition, Scaffolding | **16–22 h** | 96–140 h |
+| **5** | **Persistent Learner Model** | Mastery Tracking, Spaced Revision | **14–20 h** *(Done)* | 80–118 h |
+| **6** | **Adaptive Learning & Research** | Concept Graph, FSRS, Adaptive Plan, Research | **16–22 h** *(Under Review)* | 96–140 h |
 | **7** | **Evaluation & Portfolio Polish** | Benchmarks, Security, Coverage | **20–28 h** | 116–168 h |
 | **Total** | **Full System Lifecycle** | **Production-Grade Personal StudyOS** | **116–168 h** | **~3–5 calendar weeks** |
 
