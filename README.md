@@ -17,9 +17,74 @@ StudyOS is developed under a disciplined, incremental engineering roadmap. Stage
 - [x] **Stage 4: Exam Generation, Submission & Automated Grading Engine** *(Approved & Baseline Committed at `7351c60`)*
 - [x] **Stage 5: Learner Model, Mastery Tracking & Personalized Revision** *(Approved & Baseline Committed at `73d49bf`)*
 - [x] **Stage 6: Advanced Adaptive Learning, Knowledge Graph & External Research** *(Approved & Baseline Committed at `bac6d78`)*
-- [ ] **Stage 7: Production Hardening, Security, Reproducibility & Evaluation** *(Implementation in review)*
+- [x] **Stage 7: Production Hardening, Security, Reproducibility & Evaluation**
 
 *Note: In accordance with Stage 6 scope, StudyOS provides direct concept discovery from raw chunks, course-scoped prerequisite DAGs with deterministic cycle prevention, forgetting-aware review scheduling (local-fsrs-v1), a transparent adaptive study planner, and explicit opt-in external research with SSRF safety and citation validation, without cloud telemetry or data leakage.*
+
+---
+
+## Graphical User Interface (Streamlit)
+
+StudyOS provides an integrated, polished graphical user interface built on Streamlit that connects directly to the core backend services without relying on terminal commands for everyday studying.
+
+### Quickstart
+
+To launch the graphical interface on local loopback:
+
+```powershell
+uv run streamlit run studyos/ui/app.py --server.address=127.0.0.1
+```
+
+Once launched, navigate to `http://127.0.0.1:8501` in your browser.
+
+### Key Features & Sections
+
+1. **📊 Dashboard:**
+   - Real-time persisted metrics: registered courses, documents, indexed chunks, exams, completed attempts, and due reviews.
+   - Live system health status for SQLite WAL storage and local Ollama inference models.
+   - One-click quick launch actions into primary study workflows.
+
+2. **📁 Courses & Materials:**
+   - Create, list, and switch course contexts.
+   - Upload lecture materials (`.pdf`, `.docx`, `.pptx`, `.txt`) with automatic temporary file cleanup.
+   - SHA-256 duplicate detection with optional **Force Re-index** toggle to replace existing materials.
+   - Ingested document library with element counts, chunk metrics, and status badges.
+
+3. **💬 Grounded AI Tutor:**
+   - Multi-document filtering within the selected course.
+   - Pedagogical explanation styles: `Balanced`, `Concise`, `Detailed`.
+   - Clear retrieval modality badges: **Hybrid Search** (Dense Vector + BM25) vs. **Degraded Lexical Search** (BM25 keyword fallback).
+   - Verifiable citation cards with expandable excerpt drawers citing exact page/slide locations and source quotes.
+   - Explicit abstention when course notes lack sufficient evidence to answer factually.
+   - Actionable remediation diagnostics when Ollama is offline.
+
+4. **📝 Practice Exams & Assessments:**
+   - Dynamic exam generation by topic focus, question count (1-20), difficulty, and question types (MCQ, True/False, Short Answer).
+   - **Strict Answer-Key Isolation:** The student taking interface presents only `PublicExam` structures; correct answers, rubrics, and explanations are never loaded into the client session state before submission.
+   - Comprehensive post-submission grading report with score cards, feedback, and citation sources.
+   - Short-answer questions awaiting manual review display provisional scores rather than false zero scores.
+
+5. **📈 Learning Progress & Knowledge Graph:**
+   - Course-scoped mastery distribution based on Laplace smoothing ($M = (k+1)/(n+2)$): Strong, Moderate, Weak, Needs Evidence, and Unassessed.
+   - Searchable Concept Catalog distinguishing proposed vs. accepted concepts.
+   - Spaced repetition review queue with one-click rating updates (`Again`, `Hard`, `Good`, `Easy`).
+   - Direct concept discovery tool to extract knowledge concepts from documents without taking exams first.
+
+6. **🧭 Adaptive Study Planner:**
+   - 100% deterministic, offline study plan generation (zero LLM calls).
+   - Time-budgeted study sessions (20, 30, 45, 60 minutes or unlimited).
+   - Transparent diagnostic rationales and actionable alerts for unmet course prerequisites.
+
+7. **🔬 External Research:**
+   - Separate, strictly isolated interface for querying public online resources (e.g., Wikipedia).
+   - Strict privacy boundary: local course documents are never transmitted across the network.
+   - **Mandatory Explicit Opt-In Checkbox:** queries are blocked unless the student explicitly authorizes outbound search.
+   - Grounded summaries with verified `[EXT-N]` citations and historical query log.
+
+8. **⚙️ System & Index Status:**
+   - Storage path inspection and SQLite database size metrics.
+   - Ollama chat and embedding model connectivity health checks with remediation shell commands.
+   - SQLite vs. ChromaDB vector count reconciliation and safe, non-destructive synchronization trigger.
 
 ---
 
@@ -89,13 +154,17 @@ Detailed architecture specifications, functional requirements, and execution pla
 ## Setup, Operations & Stage 2 Guide
 
 ### 1. Prerequisites & Environment Setup
+
 - **Python**: 3.12 managed via `uv`.
 - **Local Embedding Provider**: [Ollama](https://ollama.com/) with the `all-minilm:latest` (or `all-minilm`) model installed:
+
   ```powershell
   ollama pull all-minilm
   ollama serve
   ```
+
 - **Virtual Environment**:
+
   ```powershell
   uv sync
   .\.venv\Scripts\activate
@@ -104,6 +173,7 @@ Detailed architecture specifications, functional requirements, and execution pla
 ---
 
 ### 2. Configuration Keys & Defaults
+
 All settings can be configured via environment variables or loaded through `studyos.core.config.AppConfig`:
 
 | Setting | Environment Variable | Default Value | Description |
@@ -114,7 +184,7 @@ All settings can be configured via environment variables or loaded through `stud
 | Chroma Collection | `STUDYOS_CHROMA_COLLECTION` | `studyos_chunks` | Name of the Chroma collection |
 | Ollama Base URL | `STUDYOS_OLLAMA_BASE_URL` | `http://localhost:11434` | Endpoint for local Ollama HTTP API |
 | Embedding Model | `STUDYOS_EMBEDDING_MODEL` | `all-minilm:latest` | Local embedding model name |
-| Embedding Dimension | `STUDYOS_EMBEDDING_DIMENSION`| `384` | Expected vector dimension (validated on responses) |
+| Embedding Dimension | `STUDYOS_EMBEDDING_DIMENSION` | `384` | Expected vector dimension (validated on responses) |
 | Embedding Timeout | `STUDYOS_EMBEDDING_TIMEOUT_SECONDS` | `30.0` | Request timeout for embedding calls in seconds |
 | RRF Constant $k$ | `STUDYOS_RRF_K` | `60` | Rank smoothing parameter for Reciprocal Rank Fusion |
 | Anonymized Telemetry | `STUDYOS_ANONYMIZED_TELEMETRY` | `False` | External telemetry toggle (always disabled locally) |
@@ -128,6 +198,7 @@ All settings can be configured via environment variables or loaded through `stud
 ---
 
 ### 3. Stage 2 Architecture & Data Flow
+
 Stage 2 implements a local-first hybrid retrieval engine combining lexical search and dense semantic vector search:
 
 ```
@@ -168,27 +239,37 @@ Stage 2 implements a local-first hybrid retrieval engine combining lexical searc
 ### 4. Operational Commands & Maintenance
 
 #### A. Pre-Flight Ollama Health Check
+
 Verify that the local Ollama daemon is reachable and the embedding model is loaded:
+
 ```powershell
 .\.venv\Scripts\python.exe -m studyos.core.health
 ```
 
 #### B. Vector Index Synchronization & Rebuild
+
 Synchronize all SQLite chunks into ChromaDB (idempotent upsert, removes deleted chunks):
+
 ```powershell
 .\.venv\Scripts\python.exe scripts/sync_index.py --sync
 ```
+
 Check synchronization status and vector counts:
+
 ```powershell
 .\.venv\Scripts\python.exe scripts/sync_index.py --status
 ```
+
 Perform an explicit full rebuild (recreates collection from SQLite without deleting SQLite source data):
+
 ```powershell
 .\.venv\Scripts\python.exe scripts/sync_index.py --rebuild
 ```
 
 #### C. Testing Hybrid Retrieval
+
 Run a hybrid search query with optional course and document filters:
+
 ```powershell
 # Hybrid search across all courses
 .\.venv\Scripts\python.exe scripts/test_retrieval.py --query "gradient descent" --top-k 5
@@ -205,7 +286,9 @@ Run a hybrid search query with optional course and document filters:
 ```
 
 #### D. Asking Questions with the Local AI Tutor
+
 Query the AI Tutor using hybrid retrieval over your course materials, with validated source citations:
+
 ```powershell
 # Ask a conceptual question grounded in uploaded materials
 .\.venv\Scripts\python.exe scripts/ask_studyos.py --query "Explain Bellman-Ford algorithm"
@@ -221,7 +304,9 @@ Query the AI Tutor using hybrid retrieval over your course materials, with valid
 ```
 
 #### E. Generating, Taking, and Grading Practice Exams (`scripts/exams.py`)
+
 StudyOS provides a complete, local-first assessment CLI without requiring a web interface:
+
 ```powershell
 # 1. Generate an exam grounded in course materials
 .\.venv\Scripts\python.exe scripts/exams.py generate --course "CS101" --count 5 --types mcq,true_false,short_answer --difficulty medium --title "CS101 Midterm Prep"
@@ -247,7 +332,9 @@ StudyOS provides a complete, local-first assessment CLI without requiring a web 
 ```
 
 #### F. Inspecting Progress, Concepts, Reviews & Recommendations (`scripts/learner.py`)
+
 StudyOS provides an operational, local-first learner model CLI:
+
 ```powershell
 # 1. View overall learner progress or course-scoped progress
 .\.venv\Scripts\python.exe scripts/learner.py progress
@@ -527,6 +614,7 @@ python scripts/learner.py research --query "Dijkstra algorithm priority queue" -
 ---
 
 ### 9. Partial Failure Handling & Index Recovery
+
 - **Non-blocking Indexing**: Ingestion transactions in SQLite commit independently. If vector embedding or ChromaDB indexing fails post-commit (e.g., if Ollama is paused or out of memory), the SQLite document and chunk data remain intact.
 - **Actionable Warnings**: The ingestion pipeline logs a partial failure warning with the exact recovery command.
 - **Idempotent Repair**: Running `python scripts/sync_index.py --sync` safely catches up unsynced chunks without duplicating or corrupting existing embeddings.
@@ -535,7 +623,9 @@ python scripts/learner.py research --query "Dijkstra algorithm priority queue" -
 ---
 
 ### 10. Automated Testing & Continuous Integration Without Ollama
+
 The entire test suite is 100% deterministic and runs completely offline without requiring a running Ollama daemon or downloading models:
+
 - **Fake Embeddings**: Unit and integration tests inject `FakeEmbeddingProvider`, generating deterministic 384-dimensional vectors from SHA-256 hashes.
 - **Fake Chat Provider**: Tutor, exam, concept discovery, and research tests inject `FakeChatProvider`, supporting queued responses, citation verification, and error simulation.
 - **Mock HTTP Layer**: Ollama API and external network tests simulate responses, timeouts, connection errors, SSRF attempts, socket connection pinning, and malformed JSON using mocked HTTP transports.
@@ -543,6 +633,7 @@ The entire test suite is 100% deterministic and runs completely offline without 
 - **Continuous Integration**: GitHub Actions workflow (`.github/workflows/ci.yml`) runs across Windows and Linux matrix configurations, checking lockfile consistency (`uv lock --check`), dependency sync (`uv sync --frozen`), compilation, evaluation benchmark, and the complete pytest suite.
 
 Run the complete test suite (287 passing tests):
+
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -v
 ```
@@ -550,6 +641,7 @@ Run the complete test suite (287 passing tests):
 ---
 
 ### 11. Deterministic Evaluation Benchmark Harness
+
 StudyOS includes a dedicated, reproducible quality and security benchmark (`scripts/evaluate.py`) running against labeled academic fixtures:
 
 ```powershell
@@ -563,7 +655,8 @@ StudyOS includes a dedicated, reproducible quality and security benchmark (`scri
 .\.venv\Scripts\python.exe scripts/evaluate.py --live-model
 ```
 
-#### Measured Benchmark Dimensions:
+#### Measured Benchmark Dimensions
+
 1. **Retrieval Quality (RRF $k=60$):** Measures Top-1 accuracy, Recall@3, Recall@5, and Mean Reciprocal Rank (MRR) against ground-truth target chunks.
 2. **Citation Integrity & Hallucination Defense:** Confirms 100% resolution of authentic citations and 100% rejection/sanitization of hallucinated markers (`[E99]`).
 3. **Tutor Grounding & Immediate Abstention:** Verifies that unanswerable or unindexed queries trigger immediate refusal (`unsupported=True`) without hallucinating content.
@@ -574,10 +667,13 @@ StudyOS includes a dedicated, reproducible quality and security benchmark (`scri
 ---
 
 ### 12. Local Data Management, Backup & Restore
+
 All user data resides in `~/.studyos` (`studyos.db` for relational entities and `chroma/` for persistent dense vector indexes).
 
 #### A. Hot Online Backup (Live Database)
+
 Because StudyOS uses SQLite WAL mode, you can safely take a non-blocking, transactionally consistent live backup at any time:
+
 ```powershell
 # Python hot online backup using SQLite's native backup API
 .\.venv\Scripts\python.exe -c "
@@ -593,7 +689,9 @@ print('Hot backup completed successfully.')
 ```
 
 #### B. Cold File Backup & Restore
+
 To copy the database file directly, first checkpoint the write-ahead log:
+
 ```powershell
 # Checkpoint WAL log into the main database file
 .\.venv\Scripts\python.exe -c "
@@ -609,11 +707,13 @@ Copy-Item "$HOME\.studyos\studyos.db" "$HOME\.studyos\studyos_backup.db"
 ```
 
 #### C. Database Migration Integrity
+
 All migrations (0001 through 0007) execute inside atomic transaction blocks (`BEGIN TRANSACTION; ... COMMIT;`). If any migration statement fails, the transaction is immediately rolled back, leaving zero partial tables and zero schema corruption.
 
 ---
 
 ### 13. Current Known Limitations
+
 - **Citation Provenance vs. Claim Entailment**: The application strictly validates citation reference provenance (guaranteeing that every citation resolves to a real SQLite chunk retrieved for that query and rejecting invented markers). However, syntactic citation validation does not mathematically prove logical entailment of the generated claim. Formal natural language inference (NLI) evaluation is reserved for Stage 7.
 - **Assessment Structure vs. Pedagogical Validity**: The assessment engine deterministically validates question structure, schema, distractor uniqueness, single-correct-answer constraints, and evidence marker provenance. However, automated generation cannot guarantee pedagogical perfection or replace human instructor review.
 - **Local FSRS Model vs. Neurological Memory**: The review scheduling algorithm implements a documented, bounded DSR policy (`local-fsrs-v1`) calculating power-law retrievability $R(t,S)$. While mathematically principled, it is an empirical scheduling heuristic and does not prove neurological retention across all individuals.
